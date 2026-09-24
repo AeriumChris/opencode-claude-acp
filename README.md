@@ -432,6 +432,8 @@ Automatic and manual OpenCode compaction complete as **local checkpoints**. The 
 
 The bridge restores the original messages behind a checkpoint when preparing a turn. This preserves the message cursor, attachments, and pending approval/tool results: a user message admitted immediately before automatic compaction still reaches Claude once. Follow-ups and service restarts continue the saved native session. Forks, reverts, and adapters without session-loading support can bootstrap from the archived history as historical context. Switching to another provider restores that history for its requests and normal summarization.
 
+For Claude ACP, restoration happens inside the provider after host request validation. This preserves screenshots across the separate runtimes used by a bundled OpenCode executable and a filesystem plugin, including when DCP rewrites message objects. Other providers need the host's message schema to restore attachments: if an earlier context plugin replaces every host message with a plain object, disable that context transformation before switching providers. The plugin reports this explicitly and retains the archive.
+
 Checkpoint archives are local and location-scoped, and remain in plugin storage so forks and reverted histories can still reference them. Back up or migrate that storage along with the OpenCode session data. A transcript export or a move to a different location does not by itself carry these archives. Keep the plugin available for sessions that depend on its checkpoints; missing archives produce an explicit error rather than silently dropping earlier context. Checkpoints do not reduce Claude's reported native token usage or increase its context capacity.
 
 For a session left showing **Compacting** by an older plugin version, [update the configured checkout and restart the matching service](#update), then retry in that session. Old failed/running entries may remain in its history; the new compaction attempt uses the preserved conversation.
@@ -572,6 +574,7 @@ Remove only this plugin's entry from the relevant `plugins` array, then restart 
 | Still prompted after enabling automatic ACP approval | Check whether the prompt is an OpenCode tool permission or an ordinary question. These have separate behavior from ACP approvals. |
 | Plan agent still permits native edits | OpenCode plan mode is not mapped to Claude. Its host permissions do not govern Claude-native tools. |
 | Stuck showing Compacting after a failed turn | Older versions threw during host compaction. Update/rebuild the configured plugin checkout, restart the matching service, and retry. Current versions complete local checkpoints; see [Context compaction](#context-compaction). |
+| Chat stops immediately after “Session compacted,” especially with screenshots | An earlier checkpoint implementation restored plugin-local image objects into the bundled host, which rejected them during request validation. Update/rebuild the configured checkout, restart the matching service, and continue in the same session. Existing checkpoint archives remain compatible. |
 | Checkpoint history is unavailable | Restore the plugin storage for the session's original location. Checkpoints refer to locally archived history; copying only the transcript does not copy that archive. |
 | An attachment is missing | Use supported image/text formats. Upload local files for a remote server; a server cannot resolve a path on your laptop. |
 | Extra-usage error | See [Authentication and billing](#authentication-and-billing). There is no plugin switch that forces plan-only billing. |
@@ -646,7 +649,8 @@ The tests use a protocol fixture through the **real OpenCode host and HTTP serve
 | Test | Coverage |
 | --- | --- |
 | [`test/activity.test.mjs`](test/activity.test.mjs) | Pending and concurrent running tools observed before fixture completion, refined titles/inputs, sparse and duplicate results, approval handoffs, cancellation, and missing terminal status. |
-| [`test/compaction.test.mjs`](test/compaction.test.mjs) | Manual/automatic checkpoints, exactly-once pending prompts, real service-host reopen, attachments, forks/reverts, provider switching and summarization, approval/relay continuations, adapters without native loading, and missing/circular archives. |
+| [`test/compaction.test.mjs`](test/compaction.test.mjs) | Manual/automatic checkpoints, exactly-once pending prompts, real service-host reopen, attachments, forks/reverts, provider switching and summarization, approval/relay continuations, adapters without native loading, missing/circular archives, and separate image-class identities. |
+| [`test/bundled.test.mjs`](test/bundled.test.mjs) | Opt-in release-executable integration: image checkpoints, restart/fork recovery, automatic compaction during tool handoff, and DCP-style plain-object context edits. Uses an isolated server and fixture ACP process. |
 | [`test/host.test.mjs`](test/host.test.mjs) | Model discovery/visibility metadata, model-specific effort, switching/default reset, streaming, continuity, approval/denial/dismissal, cancellation, native reload/isolation, and DCP marker handling. |
 | [`test/permissions.test.mjs`](test/permissions.test.mjs) | Bounded approval summaries, omitted file bodies, adapter-specific persistent choice IDs, rejection of unoffered choices, queued/session-wide approvals, reconnect persistence, session isolation, and automatic approval configuration. |
 | [`test/http.test.mjs`](test/http.test.mjs) | Loading the configured local plugin directory; shared model/session/approval APIs across two clients; image/text attachment transport and history; native token accounting across approvals, learned context limits, and local usage reports without Claude requests. |
@@ -655,6 +659,15 @@ The tests use a protocol fixture through the **real OpenCode host and HTTP serve
 | [`test/instructions.test.mjs`](test/instructions.test.mjs) | Root/nested `AGENTS.md` reads and same-turn scoped guidance, follow-up continuity, and exclusion of unrelated host system instructions. |
 
 The repository includes a [GitHub Actions workflow](.github/workflows/ci.yml) for Windows and Ubuntu with Node.js 24.
+
+To verify the actual desktop/server executable rather than only the SDK package graph, set `OPENCODE_TEST_EXECUTABLE` to its absolute path. For the Windows installation described above:
+
+```powershell
+$env:OPENCODE_TEST_EXECUTABLE = "$env:LOCALAPPDATA\Programs\AeriumDevTools\node-v24.21.0-win-x64\node_modules\@opencode\cli\bin\opencode.exe"
+node --test test/bundled.test.mjs
+```
+
+This test starts and stops its own server with temporary configuration, storage, and a fixture adapter. It does not restart the user's service or call Claude. It is skipped when the executable variable is unset.
 
 ### Optional live Claude checks
 

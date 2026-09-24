@@ -36,7 +36,9 @@ export class Bridge {
   private discoveries = new Set<AcpConnection>();
   private originalTexts = new Map<string, ReadonlyMap<string, readonly string[]>>();
   constructor(readonly options: Options, readonly storage: Persistence,
-    readonly inventory: (models: ModelChoice[]) => void = () => {}) { this.usage = new UsageLedger(storage); }
+    readonly inventory: (models: ModelChoice[]) => void = () => {},
+    readonly restoreMessages: (sessionID: string, messages: readonly Message[], modelID: string) => Promise<readonly Message[]> = async (_id, messages) => messages,
+  ) { this.usage = new UsageLedger(storage); }
 
   rememberOriginalText(sessionID: string, texts: ReadonlyMap<string, readonly string[]>) {
     this.originalTexts.set(sessionID, texts);
@@ -155,7 +157,8 @@ export class Bridge {
     }
     const reportIDs = request.providerOptions?.acpReportIDs;
     const excluded = new Set(Array.isArray(reportIDs) ? reportIDs : []);
-    const cleaned = cleanMessages(request.messages, this.originalTexts.get(sessionID) ?? new Map())
+    const restored = await this.restoreMessages(sessionID, request.messages, modelID);
+    const cleaned = cleanMessages(restored, this.originalTexts.get(sessionID) ?? new Map())
       .filter((message) => !excluded.has(message.id));
     const ids = request.providerOptions?.acpInstructionIDs;
     const instructionIDs = new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []);

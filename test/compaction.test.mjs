@@ -9,6 +9,8 @@ import { OpenCode } from '@opencode/sdk';
 import { Plugin } from '@opencode/plugin';
 import { Model } from '@opencode/schema/model';
 import { Provider } from '@opencode/schema/provider';
+import { Media, Message, MediaPart, TextPart } from '@opencode/ai';
+import { Schema } from 'effect';
 import { createPlugin } from '../dist/index.js';
 import { Checkpoints } from '../dist/compaction.js';
 import { screenshot } from './fixtures/image.mjs';
@@ -31,6 +33,37 @@ test('checkpoint restoration rejects missing or circular archives instead of los
   await assert.rejects(checkpoints.expand(history), /history is unavailable/);
   values.set(result.metadata.claudeAcpCheckpoint, [raw]);
   await assert.rejects(checkpoints.expand(history), /circular history reference/);
+});
+
+test('checkpoint images are rehydrated using the host schema across separate module identities', async () => {
+  // A second evaluation has its own Asset class, like the bundled desktop host.
+  const foreign = await import(`${import.meta.resolve('@opencode/ai/media')}?checkpoint-host`);
+  class HostMessage extends Schema.Class('CheckpointTest.HostMessage')({
+    ...Message.fields,
+    content: Schema.Array(Schema.Union([TextPart, Schema.Struct({ ...MediaPart.fields, media: foreign.AssetSchema })])),
+  }) {}
+  const values = new Map();
+  const checkpoints = new Checkpoints({ get: async (key) => values.get(key), set: async (key, value) => { values.set(key, value); } });
+  const image = screenshot().toString('base64');
+  const local = Media.base64(image, 'image/png');
+  assert(!(local instanceof foreign.Asset));
+  assert.throws(() => new HostMessage({ role: 'user', content: [{ type: 'media', media: local }] }), /Schema validation failed/);
+  const user = { type: 'user', id: 'msg_image', time: { created: 1 }, text: 'Keep this screenshot.',
+    files: [{ mime: 'image/png', data: image, name: 'screen.png', source: { type: 'uri', uri: `data:image/png;base64,${image}` } }] };
+  const result = await checkpoints.create(checkpoints.history([user]));
+  const raw = { type: 'compaction', id: 'msg_checkpoint', time: { created: 2 }, status: 'completed', reason: 'auto', recent: '', ...result };
+  const wrapper = new HostMessage({ id: raw.id, role: 'user', content: [{ type: 'text', text: result.summary }] });
+  const current = new HostMessage({ id: 'msg_current', role: 'user', content: [{ type: 'text', text: 'Continue.' }] });
+  const restored = await checkpoints.restore([wrapper, current], checkpoints.history([raw]), { providerID: 'claude-acp', id: 'fixture-model' });
+  const asset = restored[0].content.find((part) => part.type === 'media').media;
+  assert(asset instanceof foreign.Asset);
+  assert.deepEqual(asset.inline(), local.inline(), 'image bytes and MIME survive the runtime boundary');
+  assert.equal(restored[1], current, 'unrelated hook edits retain their identity');
+  Schema.encodeSync(Schema.Array(HostMessage))(restored);
+  const plain = [{ ...wrapper }, { ...current }];
+  const providerMessages = await checkpoints.restore(plain, checkpoints.history([raw]), { providerID: 'claude-acp', id: 'fixture-model' }, 'provider');
+  assert.deepEqual(providerMessages[0].content.find((part) => part.type === 'media').media.inline(), local.inline());
+  await assert.rejects(checkpoints.restore(plain, checkpoints.history([raw]), { providerID: 'other', id: 'fixture' }), /context hook replaced all host Message instances/);
 });
 
 test('real host checkpoints preserve pending prompts, attachments, restart continuity, forks and reverts', { timeout: 120_000 }, async (t) => {

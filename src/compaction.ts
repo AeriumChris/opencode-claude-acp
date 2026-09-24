@@ -70,12 +70,29 @@ export class Checkpoints {
   /** Replace only our checkpoint wrappers, preserving other plugins' message edits.
    * Also used for other providers and their compaction requests after a model switch.
    */
-  async restore(messages: readonly Message[], history: History, model: Model.Ref): Promise<Message[]> {
+  async restore(messages: readonly Message[], history: History, model: Model.Ref, runtime: 'host' | 'provider' = 'host'): Promise<Message[]> {
     const checkpoints = new Map(history.filter((message) => reference(message)).map((message) => [message.id, message]));
+    // The desktop executable and a filesystem plugin have separate copies of
+    // @opencode/ai. Media.Asset is validated with instanceof, so local converter
+    // instances cannot cross back into the host. Decode the wire representation
+    // with the host Message schema supplied on its existing message instances.
+    const hostMessage = messages.map((message) => message.constructor).find(Schema.isSchema) as typeof Message | undefined;
     const restored: Message[] = [];
     for (const message of messages) {
       const checkpoint = message.id && checkpoints.get(message.id as SessionMessage.ID);
-      if (checkpoint) restored.push(...toLLMMessages(await this.expand([checkpoint]), model));
+      if (checkpoint) {
+        const converted = toLLMMessages(await this.expand([checkpoint]), model);
+        // ACP consumes restored messages inside its own provider, after host
+        // validation. This also supports hooks such as DCP that spread messages
+        // into plain objects and therefore erase the host schema constructor.
+        if (runtime === 'provider' || !converted.some((item) => item.content.some((part) => part.type === 'media'))) {
+          restored.push(...converted);
+          continue;
+        }
+        if (!hostMessage) throw new Error('Claude ACP cannot restore this checkpoint for another provider because a context hook replaced all host Message instances. Continue with Claude ACP or disable that context hook before switching providers.');
+        const decode = Schema.decodeUnknownSync(Schema.toCodecJson(Schema.Array(hostMessage)));
+        restored.push(...decode(JSON.parse(JSON.stringify(converted))));
+      }
       else restored.push(message);
     }
     return restored;

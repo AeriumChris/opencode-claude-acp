@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Plugin } from '@opencode/plugin';
 import { Model } from '@opencode/schema/model';
 import { Provider } from '@opencode/schema/provider';
+import { Session } from '@opencode/schema/session';
 import { Bridge } from './bridge.js';
 import type { ModelChoice } from './acp.js';
 import { parseOptions, type Options } from './options.js';
@@ -19,6 +20,7 @@ export function createPlugin(options: Options = {}) {
     const catalogRegisteredAt = Date.now();
     let choices: ModelChoice[] = [];
     let disposed = false;
+    const checkpoints = new Checkpoints(ctx.storage);
     const bridge = new Bridge(parseOptions({ ...ctx.options, ...options }), ctx.storage, (models) => {
       if (!models.length || disposed) return;
       const merged = new Map(choices.map((model) => [model.id, model]));
@@ -27,9 +29,10 @@ export function createPlugin(options: Options = {}) {
       if (JSON.stringify(next) === JSON.stringify(choices)) return;
       choices = next;
       void ctx.provider.reload().catch(() => {});
-    });
+    }, async (sessionID, messages, modelID) => checkpoints.restore(messages,
+      checkpoints.history(await ctx.session.context({ sessionID: Session.ID.make(sessionID) })),
+      { providerID, id: Model.ID.make(modelID) }, 'provider'));
     bridges.set(instanceID, bridge);
-    const checkpoints = new Checkpoints(ctx.storage);
     const registrations: { dispose(): Promise<void> }[] = [];
     registrations.push(await ctx.provider.transform((editor) => {
       const models = [{ ...choices.find((item) => item.id === 'default'), id: 'default', name: 'Claude Code — default (ACP)' },
@@ -46,8 +49,11 @@ export function createPlugin(options: Options = {}) {
     }));
     registrations.push(await ctx.session.hook('context', async (event) => {
       const projected = checkpoints.history(await ctx.session.context({ sessionID: event.sessionID }));
-      event.messages = await checkpoints.restore(event.messages, projected, event.model);
-      if (event.model.providerID !== providerID) { await bridge.reset(event.sessionID); return; }
+      if (event.model.providerID !== providerID) {
+        event.messages = await checkpoints.restore(event.messages, projected, event.model);
+        await bridge.reset(event.sessionID);
+        return;
+      }
       const session = await ctx.session.get({ sessionID: event.sessionID });
       const history = await checkpoints.expand(projected);
       const originals = new Map<string, string[]>();
