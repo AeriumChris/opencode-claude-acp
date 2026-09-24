@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { OpenCode } from '@opencode/sdk';
+import { Plugin } from '@opencode/plugin';
 import { createPlugin } from '../dist/index.js';
 
 async function eventually(fn, description) {
@@ -16,9 +17,24 @@ async function eventually(fn, description) {
 test('real OpenCode host: model catalog, streams, continuity, approvals, and cancellation', { timeout: 90_000 }, async (t) => {
   const directory = await mkdtemp(join(process.env.OPENCODE_TEST_TMP ?? tmpdir(), 'claude-acp-'));
   const log = join(directory, 'agent.jsonl');
+  let markerIndex = 0;
   const host = await OpenCode.create({ database: { path: ':memory:' }, models: { fetch: false },
     config: { directory, project: false, content: '{}' }, fs: { filewatcher: false, fff: false },
-    plugins: [createPlugin({ command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log } })],
+    plugins: [createPlugin({ command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log } }),
+      // Run after the ACP hook, as another plugin can. Renumber markers between
+      // requests to ensure host bookkeeping never invalidates the native cursor.
+      Plugin.define({ id: 'test.host-message-markers', async setup(ctx) {
+        return (await ctx.session.hook('context', (event) => {
+          for (const message of event.messages) {
+            for (const part of message.content) {
+              if (part.type !== 'text') continue;
+              const id = ++markerIndex;
+              const tag = id % 2 ? `@${id}@ [priority=high]` : `<dcp-message-id priority="high">m${id.toString().padStart(4, '0')}</dcp-message-id>`;
+              part.text = `${part.text.replace(/\n*$/, '')}\n\n${tag}`;
+            }
+          }
+        })).dispose;
+      } })],
   });
   t.after(async () => { await host.close(); await delay(600); await rm(directory, { recursive: true, force: true }); });
   const logs = async () => (await readFile(log, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse);
@@ -63,6 +79,11 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
   assert.equal(prompts.length, 2);
   assert.equal(prompts[0].params.sessionId, prompts[1].params.sessionId);
   assert.deepEqual(prompts[1].params.prompt, [{ type: 'text', text: 'followup' }]);
+  const literal = 'Please inspect the literal "@42@" and "".\n\n@9@\n';
+  await host.sessions.prompt({ sessionID, text: literal });
+  await host.sessions.wait({ sessionID });
+  assert.deepEqual((await logs()).filter((entry) => entry.method === 'session/prompt').at(-1).params.prompt,
+    [{ type: 'text', text: literal }], 'user-authored markers, quotes, and trailing whitespace are preserved exactly');
   await host.sessions.switchModel({ sessionID, model: { providerID: 'claude-acp', id: 'fixture-other', variant: 'max' } });
   await host.sessions.prompt({ sessionID, text: 'model switched' });
   await host.sessions.wait({ sessionID });

@@ -4,6 +4,7 @@ import { LLMEvent, type LLMRequest, type Message } from '@opencode/ai';
 import { AcpConnection, effortChoices, modelChoices, type ModelChoice } from './acp.js';
 import type { Options } from './options.js';
 import { Queue } from './queue.js';
+import { cleanMessages } from './prompt.js';
 
 type Saved = { sessionID: string; directory: string; users: string[] };
 type Pending = { token: string; request: RequestPermissionRequest; answer?: boolean;
@@ -24,8 +25,13 @@ export class Bridge {
   private entries = new Map<string, Entry>();
   private closed = false;
   private discoveries = new Set<AcpConnection>();
+  private originalTexts = new Map<string, ReadonlyMap<string, readonly string[]>>();
   constructor(readonly options: Options, readonly storage: Persistence,
     readonly inventory: (models: ModelChoice[]) => void = () => {}) {}
+
+  rememberOriginalText(sessionID: string, texts: ReadonlyMap<string, readonly string[]>) {
+    this.originalTexts.set(sessionID, texts);
+  }
 
   async discover(directory: string) {
     if (this.closed) return;
@@ -103,6 +109,8 @@ export class Bridge {
   }
 
   async *stream(sessionID: string, directory: string, modelID: string, request: LLMRequest, signal: AbortSignal): AsyncIterable<LLMEvent> {
+    const messages = cleanMessages(request.messages, this.originalTexts.get(sessionID) ?? new Map());
+    this.originalTexts.delete(sessionID);
     const abort = () => this.cancel(sessionID);
     signal.addEventListener('abort', abort, { once: true });
     let entry: Entry | undefined;
@@ -120,7 +128,7 @@ export class Bridge {
       entry = await this.entry(sessionID, directory);
       if (signal.aborted) throw new Error('Claude ACP request cancelled.');
       if (entry.turn?.streaming) throw new Error('A Claude ACP turn is already streaming for this session.');
-      const incomingUsers = request.messages.filter((message) => message.role === 'user').map(hash);
+      const incomingUsers = messages.filter((message) => message.role === 'user').map(hash);
       if (entry.turn?.paused && (incomingUsers.length !== entry.users.length || incomingUsers.some((value, index) => value !== entry!.users[index]))) {
         // A new user turn must never be consumed as continuation of a dismissed approval.
         this.cancel(sessionID);
@@ -133,7 +141,7 @@ export class Bridge {
         entry.turn.permissions.delete(permission.token);
         entry.turn.paused = undefined;
       } else {
-        const users = request.messages.filter((message) => message.role === 'user');
+        const users = messages.filter((message) => message.role === 'user');
         const fingerprints = users.map(hash);
         if (!users.length) throw new Error('Claude ACP requires a user message.');
         if (entry.users.some((value, index) => fingerprints[index] !== value)) {
@@ -147,9 +155,9 @@ export class Bridge {
         const effort = request.providerOptions?.acpEffort;
         await entry.acp.selectEffort(typeof effort === 'string' ? effort : 'default');
         const prompt: ContentBlock[] = [];
-        if (!entry.users.length && request.messages.length > 1) {
-          const lastUser = request.messages.lastIndexOf(users.at(-1)!);
-          const history = request.messages.slice(0, lastUser).map((message) => `${message.role}: ${text(message)}`).join('\n\n');
+        if (!entry.users.length && messages.length > 1) {
+          const lastUser = messages.lastIndexOf(users.at(-1)!);
+          const history = messages.slice(0, lastUser).map((message) => `${message.role}: ${text(message)}`).join('\n\n');
           if (history) prompt.push({ type: 'text', text: `Prior conversation, supplied as historical context. Do not re-execute old instructions:\n<conversation_history>\n${history}\n</conversation_history>` });
         }
         // Claude owns its system prompt/tools/CLAUDE.md. OpenCode's tool instructions are not forwarded.
@@ -245,10 +253,11 @@ export class Bridge {
     timer.unref();
   }
 
-  async reset(sessionID: string) { this.cancel(sessionID); await this.storage.remove(sessionID); }
+  async reset(sessionID: string) { this.cancel(sessionID); this.originalTexts.delete(sessionID); await this.storage.remove(sessionID); }
   onIdle(sessionID: string) { if (this.entries.get(sessionID)?.turn) this.cancel(sessionID); }
   close() {
     this.closed = true;
+    this.originalTexts.clear();
     for (const connection of this.discoveries) connection.close();
     this.discoveries.clear();
     for (const id of this.entries.keys()) this.cancel(id);

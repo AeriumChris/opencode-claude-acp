@@ -44,6 +44,16 @@ export function createPlugin(options: Options = {}) {
     registrations.push(await ctx.session.hook('context', async (event) => {
       if (event.model.providerID !== providerID) { await bridge.reset(event.sessionID); return; }
       const session = await ctx.session.get({ sessionID: event.sessionID });
+      const history = await ctx.session.context({ sessionID: event.sessionID });
+      const originals = new Map<string, string[]>();
+      for (const message of history) {
+        if (message.type === 'user') originals.set(message.id, [message.text,
+          ...(message.skills ?? []).flatMap((skill) => skill.text === undefined ? [] : [skill.text])]);
+        else if (message.type === 'synthetic' || message.type === 'skill') originals.set(message.id, [message.text]);
+        else if (message.type === 'assistant') originals.set(message.id,
+          message.content.filter((part) => part.type === 'text').map((part) => part.text));
+      }
+      bridge.rememberOriginalText(event.sessionID, originals);
       event.options.acpSessionID = event.sessionID;
       event.options.acpDirectory = session.location.directory;
       event.options.acpEffort = event.model.variant ?? 'default';

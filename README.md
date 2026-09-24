@@ -77,6 +77,7 @@ Claude Code CLI
 
 - Claude owns the agent loop, its tools, and native project configuration such as `CLAUDE.md`.
 - Model choices come from ACP session configuration; Claude model IDs are not hardcoded.
+- DCP's generated trailing message-ID markers are removed before forwarding to Claude, using the persisted message text to distinguish them from literal markers you typed. This also keeps DCP renumbering from resetting the native conversation.
 - Desktop/web defaults to recent entries, one per model family. ACP choices therefore use their catalog-registration time and separate families so they appear by default. This timestamp describes the catalog entry, not the underlying Claude model's launch date. Explicit client-side hidden-model preferences still take precedence.
 - Each OpenCode session has a separate ACP connection and native session identity. Follow-up messages reuse it; idle connections close after five minutes and reload saved sessions on demand.
 - Text and thought chunks stream into OpenCode. Completed/failed Claude tools appear as provider-executed `claude_code` results.
@@ -120,6 +121,8 @@ npm test
 ```
 
 Tests run a deterministic ACP subprocess through the **real OpenCode host**, covering dynamic models, model-specific effort variants, model/effort switching, resetting effort, streamed output, continuity, allow/deny/custom answers, dismissal, cancellation, session loading, and isolation. A separate test loads the plugin from its directory via an authenticated HTTP server and exercises effort selection and approvals from a second client. These tests do not use a Claude account.
+
+The host test also injects DCP-style compact/XML markers after the ACP context hook, checks that Claude receives the original text, and verifies that user-authored markers, quotes, and whitespace survive unchanged.
 
 For an authenticated request through the actual bundled adapter and Claude CLI:
 
