@@ -9,10 +9,12 @@ export interface Options {
   startupTimeoutMs?: number;
   /** Close inactive adapter processes; Claude's persisted session can be reloaded. */
   idleTimeoutMs?: number;
+  /** Automatically approve ACP permission requests. Host tool permissions still apply. */
+  permissionMode?: 'ask' | 'allow';
 }
 
 export function parseOptions(input: Record<string, unknown>): Options {
-  const allowed = new Set(['command', 'args', 'env', 'nodeExecutable', 'startupTimeoutMs', 'idleTimeoutMs']);
+  const allowed = new Set(['command', 'args', 'env', 'nodeExecutable', 'startupTimeoutMs', 'idleTimeoutMs', 'permissionMode']);
   for (const key of Object.keys(input)) if (!allowed.has(key)) throw new Error(`Unknown Claude ACP option: ${key}`);
   for (const key of ['command', 'nodeExecutable']) {
     if (input[key] !== undefined && (typeof input[key] !== 'string' || !input[key])) throw new Error(`${key} must be a non-empty string.`);
@@ -23,6 +25,7 @@ export function parseOptions(input: Record<string, unknown>): Options {
   for (const key of ['startupTimeoutMs', 'idleTimeoutMs']) {
     if (input[key] !== undefined && (typeof input[key] !== 'number' || !Number.isSafeInteger(input[key]) || input[key] <= 0 || input[key] > 2_147_483_647)) throw new Error(`${key} must be a positive 32-bit integer.`);
   }
+  if (input.permissionMode !== undefined && input.permissionMode !== 'ask' && input.permissionMode !== 'allow') throw new Error('permissionMode must be ask or allow.');
   return input as Options;
 }
 

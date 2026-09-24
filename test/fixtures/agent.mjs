@@ -65,20 +65,25 @@ async function handle(message) {
         update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(outputs) } });
       } finally { await mcp.close(); }
     } else if (text.startsWith('permission')) {
-      const toolCallId = randomUUID();
-      const requestID = nextID++;
-      const response = await new Promise((resolve) => {
-        pending.set(requestID, resolve);
-        send({ id: requestID, method: 'session/request_permission', params: { sessionId,
-          toolCall: { toolCallId, title: 'Write fixture.txt', kind: 'edit', rawInput: { path: 'fixture.txt' } },
-          options: [{ optionId: 'yes', kind: 'allow_once', name: 'Allow once' }, { optionId: 'no', kind: 'reject_once', name: 'Deny' }],
-        } });
-      });
-      log({ permissionResult: response });
-      if (!prompts.has(id)) return;
-      const approved = response.outcome.outcome === 'selected' && response.outcome.optionId === 'yes';
-      update({ sessionUpdate: 'tool_call_update', toolCallId, title: 'Write fixture.txt', status: approved ? 'completed' : 'failed', rawOutput: approved ? 'written' : 'denied' });
-      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: approved ? 'Approved operation completed.' : 'Operation denied.' } });
+      const requests = text.startsWith('permission:') ? JSON.parse(text.slice(11)) : [{}];
+      await Promise.all(requests.map(async (request) => {
+        const toolCallId = randomUUID();
+        const requestID = nextID++;
+        const options = request.options ?? [{ optionId: 'yes', kind: 'allow_once', name: 'Allow once' }, { optionId: 'no', kind: 'reject_once', name: 'Deny' }];
+        const response = await new Promise((resolve) => {
+          pending.set(requestID, resolve);
+          send({ id: requestID, method: 'session/request_permission', params: { sessionId,
+            toolCall: { toolCallId, title: 'Write fixture.txt', kind: 'edit', rawInput: { path: 'fixture.txt' }, ...request.toolCall },
+            options,
+          } });
+        });
+        log({ sessionId, permissionResult: response });
+        if (!prompts.has(id)) return;
+        const approved = response.outcome.outcome === 'selected' && options.some((option) =>
+          option.optionId === response.outcome.optionId && ['allow_once', 'allow_always'].includes(option.kind));
+        update({ sessionUpdate: 'tool_call_update', toolCallId, title: 'Write fixture.txt', status: approved ? 'completed' : 'failed', rawOutput: approved ? 'written' : 'denied' });
+        update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: approved ? 'Approved operation completed.' : 'Operation denied.' } });
+      }));
     } else update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `fixture:${text}` } });
     prompts.delete(id);
     usageUpdate(); // Cumulative readings are snapshots, not increments.

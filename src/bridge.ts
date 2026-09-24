@@ -9,16 +9,17 @@ import { cleanMessages } from './prompt.js';
 import { contentBlocks } from './attachments.js';
 import { ToolRelay, toolError, toolResult } from './tool-relay.js';
 import { UsageLedger, formatUsage, type UsageReport } from './usage.js';
+import { allowPermission, permissionChoices, permissionResponse, permissionSummary, type Approval } from './permissions.js';
 
-type Saved = { sessionID: string; directory: string; users: string[] };
-type Pending = { token: string; request: RequestPermissionRequest; answer?: boolean;
+type Saved = { sessionID: string; directory: string; users: string[]; allowAll?: boolean };
+type Pending = { token: string; request: RequestPermissionRequest; answer?: Approval;
   resolve(response: RequestPermissionResponse): void };
 type ToolCall = { token: string; name: string; input: unknown; started: boolean; resolve(result: CallToolResult): void };
 type Packet = { update: SessionUpdate } | { permission: Pending } | { tool: ToolCall };
 type Turn = { queue: Queue<Packet>; permissions: Map<string, Pending>; tools: Map<string, ToolCall>;
   paused?: Pending | ToolCall; streaming: boolean; stopReason?: string; usage?: unknown; report: UsageReport };
 type Entry = { acp: AcpConnection; relay: ToolRelay; catalog: string; deliveredInstructions: string;
-  ready: Promise<void>; users: string[]; turn?: Turn; idle?: NodeJS.Timeout };
+  ready: Promise<void>; users: string[]; allowAll?: boolean; turn?: Turn; idle?: NodeJS.Timeout };
 
 export interface Persistence {
   get(key: string): Promise<unknown>;
@@ -114,6 +115,7 @@ export class Bridge {
     this.entries.set(id, created);
     created.ready = (async () => {
       const saved = await this.storage.get(id) as Saved | undefined;
+      created.allowAll = saved?.directory === directory && saved.allowAll === true;
       const server = await created.relay.start();
       const resumed = await created.acp.start(saved?.directory === directory ? saved.sessionID : undefined, [server]);
       if (resumed && saved) created.users = saved.users;
@@ -128,8 +130,9 @@ export class Bridge {
     const pending = this.entries.get(sessionID)?.turn?.permissions.get(callID);
     if (!pending) return;
     if (answers === undefined) { this.cancel(sessionID); return; }
-    pending.answer = Array.isArray(answers) && answers.length === 1 &&
-      Array.isArray(answers[0]) && answers[0].length === 1 && answers[0][0] === 'Allow once';
+    const label = Array.isArray(answers) && answers.length === 1 &&
+      Array.isArray(answers[0]) && answers[0].length === 1 ? answers[0][0] : undefined;
+    pending.answer = permissionChoices(pending.request).find((choice) => choice.label === label);
   }
 
   toolStarted(sessionID: string, callID: string, name: string) {
@@ -202,8 +205,12 @@ export class Bridge {
           } else permission.resolve(toolError('OpenCode did not complete this tool call.'));
           entry.turn.tools.delete(permission.token);
         } else {
-          const choice = permission.request.options.find((option) => option.kind === (permission.answer === true ? 'allow_once' : 'reject_once'));
-          permission.resolve(choice ? { outcome: { outcome: 'selected', optionId: choice.optionId } } : { outcome: { outcome: 'cancelled' } });
+          if (permission.answer?.allowAll) {
+            await this.storage.set(sessionID, { sessionID: entry.acp.sessionID, directory, users: entry.users, allowAll: true });
+            entry.allowAll = true;
+          }
+          permission.resolve(permissionResponse(permission.answer?.optionId ??
+            permission.request.options.find((option) => option.kind === 'reject_once')?.optionId));
           entry.turn.permissions.delete(permission.token);
         }
         entry.turn.paused = undefined;
@@ -242,7 +249,7 @@ export class Bridge {
         }
         entry.users = fingerprints;
         // Persist before sending: automatic retries must not duplicate agent-side effects.
-        await this.storage.set(sessionID, { sessionID: entry.acp.sessionID, directory, users: fingerprints });
+        await this.storage.set(sessionID, { sessionID: entry.acp.sessionID, directory, users: fingerprints, allowAll: entry.allowAll });
         const report = await this.usage.begin(sessionID, entry.acp.sessionID, modelID);
         const turn: Turn = { queue: new Queue(), permissions: new Map(), tools: new Map(), streaming: false, report };
         entry.turn = turn;
@@ -267,13 +274,16 @@ export class Bridge {
         if ('permission' in packet) {
           yield* endBlock();
           const pending = packet.permission;
+          if (entry.allowAll || this.options.permissionMode === 'allow') {
+            pending.resolve(allowPermission(pending.request));
+            turn.permissions.delete(pending.token);
+            continue;
+          }
           turn.paused = pending;
-          const details = pending.request.toolCall;
           yield LLMEvent.toolCall({ id: pending.token, name: 'question', input: { questions: [{
             header: 'Claude ACP approval', multiple: false,
-            question: `Claude Code requests permission: ${details.title ?? details.toolCallId}\n\n${JSON.stringify(details.rawInput ?? details.content ?? {}, null, 2)}\n\nAllow this operation once?`,
-            options: [{ label: 'Deny', description: 'Do not run this operation.' },
-              { label: 'Allow once', description: 'Approve this one Claude Code operation.' }],
+            question: permissionSummary(pending.request),
+            options: permissionChoices(pending.request).map(({ label, description }) => ({ label, description })),
           }] } });
           paused = true;
           yield LLMEvent.stepFinish({ index: 0, reason: { normalized: 'tool-calls' } });
