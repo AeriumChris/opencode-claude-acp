@@ -273,6 +273,8 @@ When an approval or relayed OpenCode tool takes over, the current display entry 
 
 The display reflects activity reported by ACP. Available thought chunks continue streaming, but command-output streaming and live title changes after an entry starts running depend on host/adapter support.
 
+To activate this behavior after updating, rebuild the **configured plugin checkout** and restart its OpenCode service after active work finishes. New activity uses the improved display; existing conversation entries retain their old titles and results. See [Update](#update) for commands, including Windows desktop installations with a bundled service.
+
 ### Effort behavior
 
 - Effort levels are discovered **per model** from ACP's `thought_level` options. Do not assume every model supports `high`, `max`, or any effort selector.
@@ -522,6 +524,20 @@ opencode service status
 ```
 
 Refresh connected clients and start a new Claude ACP conversation to get newly added startup guidance. Local source checkouts are updated with Git and rebuilt; `opencode plugin update` is not a substitute for these steps.
+
+#### Windows desktop: restart the matching service
+
+When multiple OpenCode installations exist, the `opencode` command on your terminal's `PATH` may manage a different service from the desktop app. Use the executable belonging to the installation that runs your desktop's service.
+
+For the AeriumDevTools installation bundled with Node.js 24.21.0, run in PowerShell:
+
+```powershell
+$openCode = "$env:LOCALAPPDATA\Programs\AeriumDevTools\node-v24.21.0-win-x64\node_modules\@opencode\cli\bin\opencode.exe"
+& $openCode service restart
+& $openCode service status
+```
+
+Adjust the path if your bundled Node version or installation directory differs. Run the restart after active work finishes. Rebuilding a separate development clone does not update the installed plugin: use the checkout referenced by `plugins[].package` in your OpenCode configuration.
 
 ### Remove
 
