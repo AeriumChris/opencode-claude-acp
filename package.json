@@ -25,6 +25,7 @@
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.81.1",
     "@agentclientprotocol/sdk": "1.5.0",
+    "@modelcontextprotocol/sdk": "1.30.1",
     "@opencode/ai": "2.0.15",
     "@opencode/schema": "2.0.15",
     "effect": "4.0.0-rc.112"

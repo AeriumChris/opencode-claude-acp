@@ -1,4 +1,5 @@
 import { OpenCode } from '@opencode/sdk';
+import { Plugin } from '@opencode/plugin';
 import { createPlugin } from '../dist/index.js';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { randomInt, randomUUID } from 'node:crypto';
@@ -9,10 +10,24 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const directory = await mkdtemp(join(process.env.OPENCODE_TEST_TMP ?? tmpdir(), 'acp-live-'));
 const effort = process.argv.find((argument) => argument.startsWith('--effort='))?.slice('--effort='.length);
+const pluginToken = randomUUID(), upstreamToken = randomUUID();
+let pluginCalls = 0;
 const host = await OpenCode.create({
   database: { path: ':memory:' }, models: { fetch: false }, config: { directory, project: false, content: '{}' },
   fs: { filewatcher: false, fff: false }, log: { level: 'warn', emit: (entry) => console.error(entry) },
-  plugins: [createPlugin({ nodeExecutable: process.execPath })],
+  plugins: [createPlugin({ nodeExecutable: process.execPath }), ...(process.argv.includes('--plugins') ? [Plugin.define({
+    id: 'smoke.plugin-tools', async setup(ctx) {
+      await ctx.tool.transform((editor) => editor.add({ name: 'relay_probe', description: 'Return a verification token from an OpenCode plugin.',
+        input: { type: 'object', properties: {}, additionalProperties: false }, options: { codemode: false },
+        async execute() { pluginCalls++; return { content: pluginToken }; },
+      }));
+      await ctx.tool.hook('execute.after', (event) => {
+        if (event.tool === 'relay_probe' && event.status === 'completed') event.result = { content: `${pluginToken}:HOOK_VERIFIED` };
+      });
+      await ctx.mcp.transform((editor) => editor.set('fixture', { type: 'local', codemode: false,
+        command: [process.execPath, resolve('test/fixtures/mcp.mjs')], environment: { FIXTURE_TOKEN: upstreamToken } }));
+    },
+  })] : [])],
 });
 try {
   let found = false;
@@ -32,6 +47,34 @@ try {
   if (!JSON.stringify(assistant).includes('ACP_READY')) throw new Error(`Live Claude smoke failed: ${JSON.stringify(context)}`);
   console.log('Live Claude → ACP → OpenCode: ACP_READY');
   if (effort) console.log(`Selected effort: ${effort}`);
+  if (process.argv.includes('--plugins')) {
+    const before = (await host.session.context({ sessionID: session.id })).length;
+    await host.session.prompt({ sessionID: session.id,
+      text: 'Use the opencode MCP server tools relay_probe and fixture_echo (with text "live-check"). Report both returned tokens verbatim including any suffixes. Do not read files or use shell commands.' });
+    let settled = false;
+    const waiting = host.session.wait({ sessionID: session.id }).finally(() => { settled = true; });
+    const deadline = Date.now() + 120_000;
+    while (!settled && Date.now() < deadline) {
+      for (const form of await host.session.form.list({ sessionID: session.id })) {
+        const title = form.fields[0]?.description?.split('\n\n')[0] ?? '';
+        const allowed = /relay_probe|fixture_echo/.test(title);
+        await host.session.form.reply({ sessionID: session.id, formID: form.id, answer: { q0: allowed ? 'Allow once' : 'Deny' } });
+      }
+      // Native MCP permission handling can itself require a host permission.
+      for (const permission of await host.permission.list({ sessionID: session.id })) {
+        await host.permission.reply({ sessionID: session.id, requestID: permission.id, reply: permission.action === 'fixture_echo' ? 'once' : 'reject' });
+      }
+      await delay(100);
+    }
+    if (!settled) await host.session.interrupt({ sessionID: session.id });
+    await waiting;
+    const messages = (await host.session.context({ sessionID: session.id })).slice(before).filter((message) => message.type === 'assistant');
+    const reply = messages.flatMap((message) => message.content.filter((part) => part.type === 'text').map((part) => part.text)).join('\n');
+    if (pluginCalls !== 1 || !reply.includes(`${pluginToken}:HOOK_VERIFIED`) || !reply.includes(`${upstreamToken}:live-check`)) {
+      throw new Error(`Live plugin/MCP smoke failed (${pluginCalls} plugin calls): ${reply}`);
+    }
+    console.log('Live Claude → OpenCode plugin + after hook + existing MCP connection: verified');
+  }
   if (process.argv.includes('--attachments')) {
     const colors = [{ name: 'RED', rgb: [255, 0, 0] }, { name: 'GREEN', rgb: [0, 180, 0] }, { name: 'BLUE', rgb: [0, 0, 255] }];
     const color = colors[randomInt(colors.length)];

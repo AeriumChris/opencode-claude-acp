@@ -59,7 +59,6 @@ export function createPlugin(options: Options = {}) {
       event.options.acpEffort = event.model.variant ?? 'default';
       const question = event.tools.question;
       if (!question) throw new Error('Claude ACP requires OpenCode’s built-in question tool for approvals. Enable it for this agent.');
-      event.tools = { question };
     }));
     registrations.push(await ctx.session.hook('title', (event) => {
       event.result = event.messages.find((item) => item.role === 'user')?.content
@@ -72,6 +71,9 @@ export function createPlugin(options: Options = {}) {
       throw new Error('OpenCode compaction is not supported by this ACP bridge. Claude Code manages its own context. Start a new session if the host context fills.');
     }, { providerID }));
     registrations.push(await ctx.session.hook('retry', (event) => { event.decision = { retry: false }; }, { providerID }));
+    registrations.push(await ctx.tool.hook('execute.before', (event) => {
+      bridge.toolStarted(event.sessionID, event.id, event.tool);
+    }));
     registrations.push(await ctx.tool.hook('execute.after', (event) => {
       if (event.tool === 'question') bridge.answer(event.sessionID, event.id,
         event.status === 'completed' ? event.result.metadata?.answers : undefined);

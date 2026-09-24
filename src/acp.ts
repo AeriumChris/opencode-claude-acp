@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import { client, ndJsonStream, PROTOCOL_VERSION, type ClientConnection, type RequestPermissionRequest,
-  type RequestPermissionResponse, type SessionConfigOption, type SessionUpdate } from '@agentclientprotocol/sdk';
+  type RequestPermissionResponse, type SessionConfigOption, type SessionUpdate, type McpServer } from '@agentclientprotocol/sdk';
 import { command, type Options } from './options.js';
 
 export interface Choice { id: string; name: string }
@@ -59,7 +59,15 @@ export class AcpConnection {
     });
   }
 
-  async start(savedID?: string) {
+  async start(savedID?: string, mcpServers: McpServer[] = []) {
+    // The bundled Claude adapter accepts a native system-prompt append through
+    // this ACP extension, preserving Claude's own preset and project guidance.
+    const meta = mcpServers.length ? { _meta: { systemPrompt: { append: [
+      'You are connected to OpenCode through ACP. The opencode MCP server exposes the tools available in this OpenCode session, including plugin and upstream MCP tools.',
+      'Prefer these tools for supported operations so OpenCode tool hooks and permissions apply. Native Claude tools remain available.',
+      'For the opencode execute tool, use search({query, namespace}) inside its code to discover exact tool paths and signatures; search is synchronous.',
+      'Only call paths returned by search, and await tool calls. Do not guess tool paths.',
+    ].join('\n') } } } : {};
     const timeout = setTimeout(() => this.close(), this.options.startupTimeoutMs ?? 30_000);
     timeout.unref();
     try {
@@ -70,16 +78,19 @@ export class AcpConnection {
       });
       this.supportsLoad = initialized.agentCapabilities?.loadSession === true;
       this.supportsImages = initialized.agentCapabilities?.promptCapabilities?.image === true;
+      if (mcpServers.length && !initialized.agentCapabilities?.mcpCapabilities?.http) {
+        throw new Error('This ACP agent does not support the HTTP MCP tool relay.');
+      }
       if (savedID && this.supportsLoad) {
         const result = await this.connection.agent.request('session/load', {
-          sessionId: savedID, cwd: this.directory, mcpServers: [],
+          sessionId: savedID, cwd: this.directory, mcpServers, ...meta,
         });
         this.config = result.configOptions ?? [];
         this.rememberModel();
         this.sessionID = savedID;
         return true;
       }
-      const result = await this.connection.agent.request('session/new', { cwd: this.directory, mcpServers: [] });
+      const result = await this.connection.agent.request('session/new', { cwd: this.directory, mcpServers, ...meta });
       this.config = result.configOptions ?? [];
       this.rememberModel();
       this.sessionID = result.sessionId;

@@ -2,8 +2,11 @@
 import { createInterface } from 'node:readline';
 import { appendFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 let sessionId;
+let servers = [];
 let model = 'fixture-model';
 let effort = 'default';
 let nextID = 1000;
@@ -23,9 +26,9 @@ async function handle(message) {
   const { id, method, params = {} } = message;
   if (!method) { pending.get(id)?.(message.result); pending.delete(id); return; }
   log({ method, params });
-  if (method === 'initialize') return result(id, { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: true } } });
-  if (method === 'session/new') { sessionId = randomUUID(); return result(id, { sessionId, configOptions: config() }); }
-  if (method === 'session/load') { sessionId = params.sessionId; return result(id, { configOptions: config() }); }
+  if (method === 'initialize') return result(id, { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: true }, mcpCapabilities: { http: true } } });
+  if (method === 'session/new') { servers = params.mcpServers; sessionId = randomUUID(); return result(id, { sessionId, configOptions: config() }); }
+  if (method === 'session/load') { servers = params.mcpServers; sessionId = params.sessionId; return result(id, { configOptions: config() }); }
   if (method === 'session/set_config_option') {
     if (params.configId === 'model') { model = params.value; if (!levels().includes(effort)) effort = 'default'; }
     else if (params.configId === 'thinking-budget' && levels().includes(params.value)) effort = params.value;
@@ -43,7 +46,20 @@ async function handle(message) {
     const text = params.prompt.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
     if (text === 'hang') return;
     update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Fixture thinking.' } });
-    if (text.startsWith('permission')) {
+    if (text.startsWith('relay:')) {
+      const server = servers.find((item) => item.name === 'opencode');
+      const mcp = new Client({ name: 'acp-fixture', version: '1' });
+      await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: { headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) },
+      }));
+      try {
+        log({ relayTools: (await mcp.listTools()).tools.map((tool) => tool.name) });
+        const calls = JSON.parse(text.slice(6));
+        const outputs = await Promise.all((Array.isArray(calls) ? calls : [calls]).map((call) => mcp.callTool(call)));
+        log({ relayResults: outputs });
+        update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(outputs) } });
+      } finally { await mcp.close(); }
+    } else if (text.startsWith('permission')) {
       const toolCallId = randomUUID();
       const requestID = nextID++;
       const response = await new Promise((resolve) => {
