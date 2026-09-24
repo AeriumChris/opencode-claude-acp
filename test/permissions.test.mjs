@@ -15,20 +15,18 @@ const options = [
   { optionId: 'rule', kind: 'allow_always', name: 'Always allow this command' },
   { optionId: 'no', kind: 'reject_once', name: 'Deny' },
 ];
-const request = { toolCall: { toolCallId: 'test', title: 'Write fixture.txt', rawInput: {
+const request = { toolCall: { toolCallId: 'test', title: 'Write frontend\\widgets\\AeriumFriendsPanel.cpp', rawInput: {
   file_path: 'C:\\Working Projects\\fixture.txt', content: 'FILE_CONTENT_MARKER\n'.repeat(10_000),
 } }, options };
 
 test('approval summaries are bounded and omit payloads; only offered ACP IDs can be selected', () => {
   const summary = permissionSummary(request);
-  assert(summary.length < 700);
-  assert.match(summary, /Working Projects/);
-  assert.doesNotMatch(summary, /FILE_CONTENT_MARKER/);
-  assert.match(summary, /characters \(omitted\)/);
+  assert.equal(summary, 'Claude Code requests permission: Write frontend\\widgets\\AeriumFriendsPanel.cpp');
   const huge = permissionSummary({ ...request, toolCall: { toolCallId: 'x'.repeat(10_000),
     title: 'huge\n'.repeat(10_000), rawInput: { path: 'x'.repeat(10_000), command: 'x\n'.repeat(10_000) } } });
-  assert(huge.length < 700);
-  assert.equal(huge.split('\n').length, 4);
+  assert(huge.length < 200);
+  assert.equal(huge.split('\n').length, 1);
+  assert.equal(permissionSummary({ toolCall: { toolCallId: 'fallback' } }), 'Claude Code requests permission: fallback');
   assert.equal(permissionChoices(request).find((choice) => choice.label === 'Allow always (2)').optionId, 'rule');
   assert.deepEqual(allowPermission(request), { outcome: { outcome: 'selected', optionId: 'yes' } });
   const rejectOnly = { ...request, options: [options.at(-1)] };
@@ -70,6 +68,7 @@ for (const permissionMode of ['ask', 'allow']) {
       await prompt([request]);
       const form = await answer('Allow always (2)');
       assert.doesNotMatch(JSON.stringify(form), /FILE_CONTENT_MARKER/);
+      assert.doesNotMatch(JSON.stringify(form), /Path:|Command:|File content:|Allow this operation\?/);
       assert.match(JSON.stringify(form), /Always allow this command/);
       await wait();
       assert.equal((await logs()).filter((entry) => entry.permissionResult).at(-1).permissionResult.outcome.optionId, 'rule');

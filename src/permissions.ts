@@ -7,18 +7,7 @@ const compact = (text: string, limit: number) => {
 };
 
 export function permissionSummary({ toolCall }: RequestPermissionRequest): string {
-  const lines = [`Claude Code requests permission: ${compact(toolCall.title ?? toolCall.toolCallId, 160)}`];
-  const input = toolCall.rawInput;
-  if (input && typeof input === 'object' && !Array.isArray(input)) {
-    const fields = input as Record<string, unknown>;
-    const path = fields.file_path ?? fields.path;
-    if (typeof path === 'string') lines.push(`Path: ${compact(path, 180)}`);
-    if (typeof fields.command === 'string') lines.push(`Command: ${compact(fields.command, 240)}`);
-    if (typeof fields.content === 'string') lines.push(`File content: ${fields.content.length} characters (omitted).`);
-    else if (fields.old_string !== undefined || fields.new_string !== undefined) lines.push('Edit content omitted.');
-  }
-  lines.push('Allow this operation?');
-  return lines.join('\n');
+  return `Claude Code requests permission: ${compact(toolCall.title ?? toolCall.toolCallId, 160)}`;
 }
 
 export function permissionChoices(request: RequestPermissionRequest): Approval[] {

@@ -368,7 +368,13 @@ There are two tool paths:
 1. **Relayed OpenCode tools:** OpenCode executes the operation with its existing tool behavior, permission checks, and hooks.
 2. **Native Claude tools:** Claude Code executes the operation with its own configuration and permissions. OpenCode tool hooks do not intercept it.
 
-When the adapter asks for ACP permission, the plugin displays a compact OpenCode **question form**. It summarizes the operation, path, and command with length limits; file bodies and edit payloads are omitted so they cannot overwhelm the approval controls.
+When the adapter asks for ACP permission, the plugin displays an OpenCode **question form** containing only the operation title, followed by the approval choices. For example:
+
+```text
+Claude Code requests permission: Write frontend\widgets\AeriumFriendsPanel.cpp
+```
+
+The title is limited to 160 characters and normalized to one line. Raw input, file bodies, edit payloads, extra path/command summaries, and follow-up question text are omitted.
 
 - **Deny:** reject this operation.
 - **Allow once:** approve this operation, when offered by the adapter.
@@ -526,7 +532,7 @@ Remove only this plugin's entry from the relevant `plugins` array, then restart 
 | Plugin/MCP tool missing | Check the session's available tools and upstream MCP connection/sign-in in OpenCode. Catalog changes apply on a subsequent user turn; try a new session after configuration changes. |
 | RTK does not affect a command | Check whether Claude used a native tool or a relayed OpenCode shell tool. Only the latter passes through the OpenCode RTK hook. |
 | Approval fails or no form appears | Keep `question` enabled. A host deny rule can reject a relayed tool, and Claude settings can already allow a native action. |
-| Huge approval text hides the buttons | Update and rebuild this checkout, then restart the service. Current prompts use bounded summaries and omit file bodies/edit payloads. |
+| Huge approval text hides the buttons | Update and rebuild the checkout referenced by the plugin's `package` path in `opencode.json(c)`, then restart the service and retry the operation. Updating a different clone does not update the installed plugin. Current prompts contain only a bounded operation title; existing forms retain their original text. |
 | Repeated ACP approval questions | Choose **Allow always** for an adapter-provided rule, **Allow all (session)** for the current session, or set `options.permissionMode` to `"allow"` across sessions. See [Permissions and cancellation](#permissions-and-cancellation). |
 | Still prompted after enabling automatic ACP approval | Check whether the prompt is an OpenCode tool permission or an ordinary question. These have separate behavior from ACP approvals. |
 | Plan agent still permits native edits | OpenCode plan mode is not mapped to Claude. Its host permissions do not govern Claude-native tools. |
