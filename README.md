@@ -20,6 +20,7 @@ This plugin connects OpenCode to the Claude Code CLI through the [Agent Client P
 - [Plugin and MCP compatibility](#plugin-and-mcp-compatibility)
 - [Permissions and cancellation](#permissions-and-cancellation)
 - [Sessions and history](#sessions-and-history)
+- [Usage, cost, and token limits](#usage-cost-and-token-limits)
 - [Authentication and billing](#authentication-and-billing)
 - [Configuration options](#configuration-options)
 - [Update or remove](#update-or-remove)
@@ -45,6 +46,8 @@ This plugin connects OpenCode to the Claude Code CLI through the [Agent Client P
 | **Conversation continuity** | Follow-ups reuse the native Claude session. Saved sessions reload after idle shutdown; history bootstrap preserves prior text and images. |
 | **DCP marker compatibility** | Generated message-ID suffixes are removed without removing literal markers, quotes, or whitespace from your original messages. |
 | **Cancellation** | Stop interrupts the active ACP turn and relayed work. Automatic model retries are disabled to avoid replaying agent actions. |
+| **Usage reporting** | Reported input, output, and cache tokens populate OpenCode's native counters. `/claude-usage` shows completed-turn totals, context occupancy/capacity, and the latest ACP cost reading without calling Claude. |
+| **Context capacity** | The selected model's context limit updates when ACP reports it. Other models retain their own observed limits or the OpenCode fallback. |
 
 Tool compatibility does not mean every OpenCode feature controls Claude's internal agent loop. See [plugin compatibility](#plugin-and-mcp-compatibility) and [current limitations](#current-limitations), especially for DCP, agent instructions, and plan mode.
 
@@ -381,6 +384,39 @@ Use **Stop** to interrupt a turn. Cancellation closes pending relay work and int
 - Titles are derived from user text without an extra Claude generation call.
 - Generated DCP suffixes are distinguished from literal text using OpenCode's persisted original messages. Your own markers, quotes, and whitespace are preserved.
 
+## Usage, cost, and token limits
+
+With a **Claude ACP model selected**, enter this slash command in the TUI, desktop app, or web conversation:
+
+```text
+/claude-usage
+```
+
+The plugin renders a local report in that conversation. **The command does not send a prompt to Claude or consume Claude tokens.** If work is running, the report is queued. Reports are excluded from subsequent Claude prompts and history bootstrap.
+
+The report includes:
+
+- **Last completed turn and observed totals:** uncached input, cache reads, cache writes, output, and total tokens. A separate thinking count appears only when supplied; output already includes thinking.
+- **Reporting coverage:** how many completed turns supplied token totals. Missing values display as **Not reported**, rather than invented zeros.
+- **Context occupancy and capacity:** the latest reported tokens used, window size, percentage, and timestamp. Context occupancy is distinct from cumulative billed tokens.
+- **ACP-reported cost:** the latest amount, currency, and timestamp for the native Claude session. Repeated cumulative updates replace the previous reading; they are not added together.
+
+Reports are saved in OpenCode's plugin storage for the session and survive plugin restarts. Accounting begins when this feature observes a turn; it does not reconstruct earlier usage. Interrupted turns may lack final token totals. The pinned Claude adapter's prompt response covers its main agent loop and may exclude subagents or internal calls included in other accounting figures.
+
+Reported tokens also populate OpenCode's ordinary assistant/session token counters. One Claude turn can span several OpenCode tool or permission steps; its token totals are recorded only on the final step, preventing double-counting.
+
+### Cost is not a billing-pool measurement
+
+ACP's cost figure is an adapter-reported value. It does **not** tell the plugin whether your subscription allowance, extra usage, or another billing arrangement was charged. The report retains the latest native-session reading rather than inventing an all-history cost across session replacements.
+
+OpenCode 2.0.15 calculates its standard dollar counter from model price tables and does not expose a provider-reported cost override through this plugin API. This plugin does not invent token prices to force that counter to match ACP. **Use `/claude-usage` for the reported cost; a zero in OpenCode's dollar counter is not evidence that usage was free.** See [Authentication and billing](#authentication-and-billing).
+
+### Model limits
+
+ACP `usage_update.size` updates the **selected model's context limit** in the shared provider catalog. This becomes available after an ordinary turn reports usage, rather than during initial model discovery. The adapter may initially estimate the window and later refine it; the report identifies the value as ACP-supplied, not independently measured.
+
+Until a model reports its capacity, the catalog retains OpenCode's default context limit. The pinned adapter does **not** expose an output-token limit in these reports, so that limit remains OpenCode's fallback. Learning one model's limit does not assign it to every Claude model. Catalog observations are relearned after a plugin restart; stored usage reports retain their last readings.
+
 ## Authentication and billing
 
 Claude authentication is handled by the **Claude CLI running as the server user**. Signing into an Anthropic API provider in OpenCode is not the same thing. An existing CLI can be selected with `CLAUDE_CODE_EXECUTABLE`; otherwise the bundled CLI is used.
@@ -485,7 +521,7 @@ Run them from the affected project; catalog/configuration is location-scoped. Fo
 
 - **OpenCode agent system prompts and native plan-mode mapping are not implemented.** Repository `AGENTS.md` reads are the supported narrower guidance path.
 - **OpenCode-side compaction and auxiliary generation fail explicitly.** Claude manages its own context; the host can still reach its separate context limit.
-- **Usage/cost accounting is not implemented.** Model token-limit metadata uses OpenCode defaults, not ACP-reported limits.
+- **Usage depends on ACP reporting.** Missing/interrupted-turn totals and historical usage cannot be reconstructed. ACP cost is shown by `/claude-usage`, separately from OpenCode's price-table dollar counter. Context capacity updates when reported; output-token limits remain OpenCode defaults. See [Usage, cost, and token limits](#usage-cost-and-token-limits).
 - **Not every plugin applies.** Host HTTP/system/compaction hooks do not control Claude's internal requests/history. Native Claude tools bypass host tool hooks.
 - Native mode selectors, slash-command discovery, in-progress native tool rendering, and native edit-review UI are not implemented.
 - Unsupported binary documents and direct remote media references are not converted into model-readable content.
@@ -538,7 +574,8 @@ The tests use a protocol fixture through the **real OpenCode host and HTTP serve
 | Test | Coverage |
 | --- | --- |
 | [`test/host.test.mjs`](test/host.test.mjs) | Model discovery/visibility metadata, model-specific effort, switching/default reset, streaming, continuity, approval/denial/dismissal, cancellation, native reload/isolation, and DCP marker handling. |
-| [`test/http.test.mjs`](test/http.test.mjs) | Loading the configured local plugin directory; shared model/session/approval APIs across two clients; image/text attachment transport and image history retention. |
+| [`test/http.test.mjs`](test/http.test.mjs) | Loading the configured local plugin directory; shared model/session/approval APIs across two clients; image/text attachment transport and history; native token accounting across approvals, learned context limits, and local usage reports without Claude requests. |
+| [`test/usage.test.mjs`](test/usage.test.mjs) | Cache/input mapping, unknown and zero values, repeated cumulative cost readings, persisted totals across reconnects, model changes, and session isolation. |
 | [`test/tools.test.mjs`](test/tools.test.mjs) | Before/after hooks, parallel calls, upstream MCP, Code Mode, errors, hidden tools, native host permission denial, forms, cancellation, image results, catalog refresh, and relay authentication/isolation. |
 | [`test/instructions.test.mjs`](test/instructions.test.mjs) | Root/nested `AGENTS.md` reads and same-turn scoped guidance, follow-up continuity, and exclusion of unrelated host system instructions. |
 
@@ -571,6 +608,7 @@ These checks have passed locally with the bundled adapter/CLI. They use temporar
 | [`src/tool-relay.ts`](src/tool-relay.ts) | Session-scoped MCP server and host-result conversion. |
 | [`src/attachments.ts`](src/attachments.ts) | Text/image conversion for new prompts and history. |
 | [`src/prompt.ts`](src/prompt.ts) | Removal of verified generated message-ID suffixes. |
+| [`src/usage.ts`](src/usage.ts) | Usage validation, native token mapping, persisted observations, and local reports. |
 | [`src/options.ts`](src/options.ts) | Plugin option validation and adapter command selection. |
 | [`src/queue.ts`](src/queue.ts), [`src/registry.ts`](src/registry.ts) | Event queue and per-plugin bridge lookup. |
 

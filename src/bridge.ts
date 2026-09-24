@@ -8,6 +8,7 @@ import { Queue } from './queue.js';
 import { cleanMessages } from './prompt.js';
 import { contentBlocks } from './attachments.js';
 import { ToolRelay, toolError, toolResult } from './tool-relay.js';
+import { UsageLedger, formatUsage, type UsageReport } from './usage.js';
 
 type Saved = { sessionID: string; directory: string; users: string[] };
 type Pending = { token: string; request: RequestPermissionRequest; answer?: boolean;
@@ -15,24 +16,25 @@ type Pending = { token: string; request: RequestPermissionRequest; answer?: bool
 type ToolCall = { token: string; name: string; input: unknown; started: boolean; resolve(result: CallToolResult): void };
 type Packet = { update: SessionUpdate } | { permission: Pending } | { tool: ToolCall };
 type Turn = { queue: Queue<Packet>; permissions: Map<string, Pending>; tools: Map<string, ToolCall>;
-  paused?: Pending | ToolCall; streaming: boolean; stopReason?: string };
+  paused?: Pending | ToolCall; streaming: boolean; stopReason?: string; usage?: unknown; report: UsageReport };
 type Entry = { acp: AcpConnection; relay: ToolRelay; catalog: string; deliveredInstructions: string;
   ready: Promise<void>; users: string[]; turn?: Turn; idle?: NodeJS.Timeout };
 
 export interface Persistence {
   get(key: string): Promise<unknown>;
-  set(key: string, value: Saved): Promise<void>;
+  set(key: string, value: Saved | UsageReport): Promise<void>;
   remove(key: string): Promise<void>;
 }
 const hash = (message: Message) => createHash('sha256').update(JSON.stringify(message.content)).digest('hex');
 
 export class Bridge {
+  readonly usage: UsageLedger;
   private entries = new Map<string, Entry>();
   private closed = false;
   private discoveries = new Set<AcpConnection>();
   private originalTexts = new Map<string, ReadonlyMap<string, readonly string[]>>();
   constructor(readonly options: Options, readonly storage: Persistence,
-    readonly inventory: (models: ModelChoice[]) => void = () => {}) {}
+    readonly inventory: (models: ModelChoice[]) => void = () => {}) { this.usage = new UsageLedger(storage); }
 
   rememberOriginalText(sessionID: string, texts: ReadonlyMap<string, readonly string[]>) {
     this.originalTexts.set(sessionID, texts);
@@ -136,7 +138,21 @@ export class Bridge {
   }
 
   async *stream(sessionID: string, directory: string, modelID: string, request: LLMRequest, signal: AbortSignal): AsyncIterable<LLMEvent> {
-    const cleaned = cleanMessages(request.messages, this.originalTexts.get(sessionID) ?? new Map());
+    if (request.providerOptions?.acpUsageReport === true) {
+      this.originalTexts.delete(sessionID);
+      const id = randomUUID();
+      yield LLMEvent.stepStart({ index: 0 });
+      yield LLMEvent.textStart({ id });
+      yield LLMEvent.textDelta({ id, text: formatUsage(await this.usage.get(sessionID)) });
+      yield LLMEvent.textEnd({ id });
+      yield LLMEvent.stepFinish({ index: 0, reason: { normalized: 'stop' } });
+      yield LLMEvent.finish({ reason: { normalized: 'stop' } });
+      return;
+    }
+    const reportIDs = request.providerOptions?.acpReportIDs;
+    const excluded = new Set(Array.isArray(reportIDs) ? reportIDs : []);
+    const cleaned = cleanMessages(request.messages, this.originalTexts.get(sessionID) ?? new Map())
+      .filter((message) => !excluded.has(message.id));
     const ids = request.providerOptions?.acpInstructionIDs;
     const instructionIDs = new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []);
     const messages = cleaned.filter((message) => !instructionIDs.has(message.id ?? ''));
@@ -227,10 +243,11 @@ export class Bridge {
         entry.users = fingerprints;
         // Persist before sending: automatic retries must not duplicate agent-side effects.
         await this.storage.set(sessionID, { sessionID: entry.acp.sessionID, directory, users: fingerprints });
-        const turn: Turn = { queue: new Queue(), permissions: new Map(), tools: new Map(), streaming: false };
+        const report = await this.usage.begin(sessionID, entry.acp.sessionID, modelID);
+        const turn: Turn = { queue: new Queue(), permissions: new Map(), tools: new Map(), streaming: false, report };
         entry.turn = turn;
         void entry.acp.connection.agent.request('session/prompt', { sessionId: entry.acp.sessionID, prompt }).then(
-          (result) => { turn.stopReason = result.stopReason; turn.queue.close(); },
+          (result) => { turn.stopReason = result.stopReason; turn.usage = result.usage; turn.queue.close(); },
           (error: unknown) => turn.queue.close(error instanceof Error ? error : new Error(String(error))),
         );
       }
@@ -264,7 +281,13 @@ export class Bridge {
           return;
         }
         const update = packet.update;
-        if ((update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'agent_thought_chunk') && update.content.type === 'text') {
+        if (update.sessionUpdate === 'usage_update') {
+          const contextWindow = await this.usage.update(sessionID, turn.report, update);
+          if (contextWindow) {
+            const choice = modelChoices(entry.acp.config).find((choice) => choice.id === turn.report.model);
+            this.inventory([{ id: turn.report.model, name: choice?.name ?? 'Claude Code — default (ACP)', contextWindow }]);
+          }
+        } else if ((update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'agent_thought_chunk') && update.content.type === 'text') {
           const kind = update.sessionUpdate === 'agent_message_chunk' ? 'text' : 'reasoning';
           if (block?.kind !== kind) {
             yield* endBlock();
@@ -283,11 +306,15 @@ export class Bridge {
         }
       }
       yield* endBlock();
+      const usage = await this.usage.finish(sessionID, turn.report, turn.usage);
       completed = true;
       entry.turn = undefined;
       const reason = { normalized: turn.stopReason === 'max_tokens' ? 'length' as const : 'stop' as const, raw: turn.stopReason };
-      yield LLMEvent.stepFinish({ index: 0, reason });
-      yield LLMEvent.finish({ reason });
+      // One ACP prompt may span multiple host tool steps. Record its totals only
+      // on the final step, never once per permission or relay continuation.
+      const providerMetadata = { 'claude-acp': { usage: turn.report } };
+      yield LLMEvent.stepFinish({ index: 0, reason, usage, providerMetadata });
+      yield LLMEvent.finish({ reason, usage, providerMetadata });
     } finally {
       signal.removeEventListener('abort', abort);
       if (entry?.turn) entry.turn.streaming = false;

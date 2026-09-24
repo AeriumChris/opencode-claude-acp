@@ -10,6 +10,7 @@ let servers = [];
 let model = 'fixture-model';
 let effort = 'default';
 let nextID = 1000;
+let turns = 0;
 const pending = new Map();
 const prompts = new Map();
 const log = (entry) => process.env.ACP_TEST_LOG && appendFileSync(process.env.ACP_TEST_LOG, `${JSON.stringify({ pid: process.pid, ...entry })}\n`);
@@ -41,6 +42,10 @@ async function handle(message) {
     return;
   }
   if (method === 'session/prompt') {
+    turns++;
+    const usageUpdate = () => process.env.ACP_TEST_USAGE && update({ sessionUpdate: 'usage_update', used: 1000,
+      size: model === 'fixture-other' ? 500000 : 1000000, cost: { amount: turns * 0.25, currency: 'USD' } });
+    usageUpdate();
     log({ effective: { sessionId, model, effort } });
     prompts.set(id, true);
     const text = params.prompt.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
@@ -76,7 +81,10 @@ async function handle(message) {
       update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: approved ? 'Approved operation completed.' : 'Operation denied.' } });
     } else update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `fixture:${text}` } });
     prompts.delete(id);
-    result(id, { stopReason: 'end_turn' });
+    usageUpdate(); // Cumulative readings are snapshots, not increments.
+    result(id, { stopReason: 'end_turn', ...(process.env.ACP_TEST_USAGE ? { usage: {
+      inputTokens: 11, outputTokens: 7, cachedReadTokens: 23, cachedWriteTokens: 5, thoughtTokens: 3, totalTokens: 46,
+    } } : {}) });
     return;
   }
   if (id !== undefined) send({ id, error: { code: -32601, message: `Unknown method: ${method}` } });

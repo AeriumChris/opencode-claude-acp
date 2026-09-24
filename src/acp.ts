@@ -5,7 +5,7 @@ import { client, ndJsonStream, PROTOCOL_VERSION, type ClientConnection, type Req
 import { command, type Options } from './options.js';
 
 export interface Choice { id: string; name: string }
-export interface ModelChoice extends Choice { efforts?: Choice[] }
+export interface ModelChoice extends Choice { efforts?: Choice[]; contextWindow?: number }
 export function effortChoices(config: SessionConfigOption[]): Choice[] {
   const option = config.find((item) => item.category === 'thought_level' && item.type === 'select');
   if (!option || option.type !== 'select') return [];

@@ -22,7 +22,7 @@ test('HTTP clients share the provider catalog, session output, and approval form
         database: { path: ':memory:' }, models: { fetch: false }, fs: { filewatcher: false, fff: false },
         config: { directory, project: false, content: JSON.stringify({ plugins: [{
           package: pathToFileURL(resolve('.')).href,
-          options: { command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log } },
+          options: { command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log, ACP_TEST_USAGE: '1' } },
         }] }) },
       });
       yield* Effect.promise(async () => {
@@ -60,6 +60,22 @@ test('HTTP clients share the provider catalog, session output, and approval form
         const entries = (await readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
         assert.equal(entries.filter((entry) => entry.effective).at(-1).effective.effort, 'high', 'HTTP-selected effort reaches the ACP prompt');
         assert.equal(entries.filter((entry) => entry.method === 'session/prompt').length, 1, 'approval does not replay the prompt');
+        assert.deepEqual((await second.session.get({ sessionID })).tokens,
+          { input: 11, output: 4, reasoning: 3, cache: { read: 23, write: 5 } }, 'native token counters count a paused ACP turn exactly once');
+        const updatedModels = (await second.model.list({ location })).data;
+        assert.equal(updatedModels.find((model) => model.providerID === 'claude-acp' && model.id === 'fixture-model').limit.context, 1000000);
+        assert.equal(updatedModels.find((model) => model.providerID === 'claude-acp' && model.id === 'fixture-other').limit.context, 200000,
+          'a context window is only assigned to the model used in that turn');
+        await second.session.command({ sessionID, name: 'claude-usage', text: '' });
+        await second.session.wait({ sessionID });
+        const reported = await second.session.context({ sessionID });
+        const report = reported.filter((message) => message.type === 'assistant').at(-1)?.content.find((part) => part.type === 'text');
+        assert(report, 'usage report is readable over the shared HTTP API');
+        assert.match(report.text, /0.25 USD/);
+        assert.match(report.text, /1000 \/ 1000000/);
+        assert.match(report.text, /1 of 1 completed turns/);
+        assert.equal((await readFile(log, 'utf8')).trim().split('\n').map(JSON.parse).filter((entry) => entry.method === 'session/prompt').length, 1,
+          'the usage command does not make a Claude request');
 
         const image = screenshot().toString('base64');
         const textFile = join(directory, 'notes.txt');
@@ -74,6 +90,8 @@ test('HTTP clients share the provider catalog, session output, and approval form
         assert.deepEqual(sent.filter((part) => part.type === 'image'), [{ type: 'image', data: image, mimeType: 'image/png' }]);
         assert.match(JSON.stringify(sent), /Attached image: screen.png/);
         assert.match(JSON.stringify(sent), /Attached text reaches Claude/);
+        assert.doesNotMatch(JSON.stringify(sent), /Claude ACP usage|conversation_history/, 'reports do not become user prompts or reset native history');
+        assert.equal((await second.session.get({ sessionID })).tokens.input, 22, 'completed-turn usage accumulates once');
         const received = await second.session.context({ sessionID });
         assert(received.some((message) => message.type === 'user' && message.files?.some((file) => file.name === 'screen.png')));
 

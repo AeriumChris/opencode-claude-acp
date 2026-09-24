@@ -36,6 +36,7 @@ export function createPlugin(options: Options = {}) {
         package: new URL('./provider.js', import.meta.url).href, settings: { instanceID } },
         models: models.map((item) => ({ ...Model.Info.default(providerID, Model.ID.make(item.id)), name: item.name,
           family: Model.Family.make(`claude-acp/${item.id}`), time: { released: catalogRegisteredAt },
+          ...(item.contextWindow ? { limit: { ...Model.Info.default(providerID, Model.ID.make(item.id)).limit, context: item.contextWindow } } : {}),
           variants: (item.efforts ?? []).filter((effort) => effort.id !== 'default')
             .map((effort) => ({ id: Model.VariantID.make(effort.id) })),
           capabilities: { tools: true, input: ['text', 'image'], output: ['text'] } })),
@@ -57,6 +58,19 @@ export function createPlugin(options: Options = {}) {
       event.options.acpSessionID = event.sessionID;
       event.options.acpDirectory = session.location.directory;
       event.options.acpEffort = event.model.variant ?? 'default';
+      const reportIDs: string[] = [];
+      let reporting = false;
+      let reportRequested = false;
+      for (const message of history) {
+        if (message.type === 'user' || message.type === 'synthetic') {
+          reporting = message.metadata?.claudeAcpUsageReport === true;
+          reportRequested = reporting;
+        }
+        if (reporting) reportIDs.push(message.id);
+        if (message.type === 'assistant') reportRequested = false;
+      }
+      event.options.acpReportIDs = reportIDs;
+      event.options.acpUsageReport = reportRequested;
       // Nested AGENTS.md files are injected by OpenCode's read tool as synthetic
       // messages. Treat these as instructions, not new user turns.
       event.options.acpInstructionIDs = history.filter((message) => message.type === 'synthetic' &&
@@ -64,6 +78,17 @@ export function createPlugin(options: Options = {}) {
       const question = event.tools.question;
       if (!question) throw new Error('Claude ACP requires OpenCode’s built-in question tool for approvals. Enable it for this agent.');
     }));
+    registrations.push(await ctx.command.transform((editor) => editor.add({ name: 'claude-usage',
+      description: 'Show recorded Claude ACP tokens, context capacity, and reported cost without calling Claude.',
+      async execute({ sessionID }) {
+        const session = await ctx.session.get({ sessionID });
+        if (session.model?.providerID !== providerID) throw new Error('Select a Claude ACP model before using /claude-usage.');
+        // The provider answers this tagged request locally. A queued synthetic
+        // with resume:false is not delivered to the transcript until another turn.
+        await ctx.session.synthetic({ sessionID, text: 'Show the recorded Claude ACP usage report.',
+          description: 'Claude ACP usage report', metadata: { claudeAcpUsageReport: true }, delivery: 'queue', resume: true });
+      },
+    })));
     registrations.push(await ctx.session.hook('title', (event) => {
       event.result = event.messages.find((item) => item.role === 'user')?.content
         .filter((part) => part.type === 'text').map((part) => part.text).join(' ').replace(/\s+/g, ' ').slice(0, 80) || 'Claude Code (ACP)';
