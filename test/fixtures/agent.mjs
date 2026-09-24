@@ -1,6 +1,7 @@
 // An actual stdio ACP peer: deterministic fixture only, never used by the plugin.
 import { createInterface } from 'node:readline';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -51,7 +52,40 @@ async function handle(message) {
     const text = params.prompt.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
     if (text === 'hang') return;
     update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Fixture thinking.' } });
-    if (text.startsWith('relay:')) {
+    if (text.startsWith('activity:')) {
+      const { gate, mode = 'complete' } = JSON.parse(text.slice(9));
+      const toolCallId = 'activity-build';
+      update({ sessionUpdate: 'tool_call', toolCallId, title: 'Build', status: 'pending', rawInput: {} });
+      while (prompts.has(id) && !existsSync(`${gate}.input`)) await delay(20);
+      if (!prompts.has(id)) return;
+      // Real adapters refine streamed input, then send sparse status/output deltas.
+      update({ sessionUpdate: 'tool_call_update', toolCallId, title: 'Build desktop tests', rawInput: { command: 'cmake --build fixture' } });
+      update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress' });
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'activity-check', title: 'Check fixture', status: 'in_progress' });
+      while (prompts.has(id) && !existsSync(gate)) await delay(20);
+      if (!prompts.has(id)) return;
+      if (mode === 'permission') {
+        const requestID = nextID++;
+        const response = await new Promise((resolve) => {
+          pending.set(requestID, resolve);
+          send({ id: requestID, method: 'session/request_permission', params: { sessionId,
+            toolCall: { toolCallId: 'activity-check', title: 'Check fixture', status: 'pending' },
+            options: [{ optionId: 'yes', kind: 'allow_once', name: 'Allow once' }, { optionId: 'no', kind: 'reject_once', name: 'Deny' }],
+          } });
+        });
+        log({ permissionResult: response });
+        if (!prompts.has(id)) return;
+      }
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'activity-check', status: 'failed', rawOutput: 'fixture check failed' });
+      if (mode !== 'missing') {
+        update({ sessionUpdate: 'tool_call_update', toolCallId, rawOutput: 'build succeeded' });
+        update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' });
+        update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' }); // Duplicate notification.
+      }
+      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Activity finished.' } });
+    } else if (text.startsWith('relay:')) {
+      const toolCallId = randomUUID();
+      update({ sessionUpdate: 'tool_call', toolCallId, title: 'Call OpenCode tools', status: 'in_progress' });
       const server = servers.find((item) => item.name === 'opencode');
       const mcp = new Client({ name: 'acp-fixture', version: '1' });
       await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url), {
@@ -62,6 +96,7 @@ async function handle(message) {
         const calls = JSON.parse(text.slice(6));
         const outputs = await Promise.all((Array.isArray(calls) ? calls : [calls]).map((call) => mcp.callTool(call)));
         log({ relayResults: outputs });
+        update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', rawOutput: 'OpenCode tools returned' });
         update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(outputs) } });
       } finally { await mcp.close(); }
     } else if (text.startsWith('permission')) {

@@ -82,6 +82,11 @@ test('ACP MCP relay uses the host tool engine, hooks, MCP connections, forms, an
   assert(executions.every((entry) => entry.sessionID === sessionID));
   assert.equal(hooks.filter((entry) => entry.tool === 'probe').length, 4);
   assert.equal((await logs()).filter((entry) => entry.method === 'session/prompt').length, 1, 'parallel tools resume one ACP prompt');
+  const nativeTools = (await host.session.context({ sessionID })).flatMap((message) => message.content ?? []).filter((part) => part.type === 'tool' && part.name === 'claude_code');
+  assert.equal(nativeTools.length, 3, 'native activity spans both parallel relay handoffs');
+  assert(nativeTools.every((part) => part.state.status === 'completed' && part.state.input.title === 'Call OpenCode tools'));
+  assert(nativeTools.slice(0, -1).every((part) => JSON.stringify(part.state.content).includes('Native operation has not finished')));
+  assert.match(JSON.stringify(nativeTools.at(-1).state.content), /OpenCode tools returned/);
   const firstServer = (await logs()).find((entry) => entry.method === 'session/new' && entry.params.mcpServers.length).params.mcpServers[0];
   assert.equal((await fetch(firstServer.url, { method: 'POST', body: '{}' })).status, 403, 'relay requires its per-session bearer');
   const other = await host.session.create({ location, model: { providerID: 'claude-acp', id: 'fixture-model' } });

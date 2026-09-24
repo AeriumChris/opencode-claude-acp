@@ -36,7 +36,7 @@ This plugin connects OpenCode to the Claude Code CLI through the [Agent Client P
 | **Model selection** | A Claude Code (ACP) provider in OpenCode's model picker. Available model IDs and names come from Claude, rather than a hardcoded list. |
 | **Effort selection** | Each model advertises its supported effort variants. Changes apply to the next new prompt; Default clears the explicit override. |
 | **Shared clients** | The TUI, desktop app, and web use the server's provider catalog, conversation output, and approval forms. |
-| **Streaming** | Text and available thought chunks stream into the conversation. Completed and failed native tool calls appear as `claude_code` results. |
+| **Streaming** | Text and available thought chunks stream into the conversation. Native tools appear as `claude_code` activity when announced, then show running and completed/failed states with readable titles. |
 | **Screenshots and files** | PNG, JPEG, GIF, and WebP images reach Claude as image data. OpenCode-resolved text/source attachments and directory listings are supported. |
 | **Repository access** | Claude can read, search, edit, and run commands in the server-side project, subject to tool permissions and OS access. |
 | **Repository guidance** | Claude is instructed to read root and applicable nested `AGENTS.md` files. Scoped guidance discovered by OpenCode's read tool reaches the same Claude turn. Native `CLAUDE.md` support remains available. |
@@ -264,6 +264,14 @@ These `run` commands send actual Claude requests. Use an interactive client for 
 5. Send a message, attach files, and answer any permission/question forms in the client.
 
 If the provider is hidden, refresh the client and check **Manage models**. Explicit hidden-model preferences take precedence over the plugin's defaults.
+
+### Native tool activity
+
+Native tools appear as soon as ACP announces them, including while their inputs are being prepared. An ACP `in_progress` update changes the entry to running; completion or failure settles it. Titles and inputs are retained across sparse updates, so a final result does not replace a readable operation title with a `toolu_…` identifier.
+
+When an approval or relayed OpenCode tool takes over, the current display entry ends with an explicit **paused** result. A new entry continues the same native operation when control returns to Claude. The paused result is a handoff marker, not evidence that the underlying operation finished. This accommodates OpenCode's per-step tool lifecycle.
+
+The display reflects activity reported by ACP. Available thought chunks continue streaming, but command-output streaming and live title changes after an entry starts running depend on host/adapter support.
 
 ### Effort behavior
 
@@ -528,6 +536,7 @@ Remove only this plugin's entry from the relevant `plugins` array, then restart 
 | Only the default model is shown | Give discovery time. Check bundled CLI sign-in and executable paths. Discovery failures leave the default entry; a submitted prompt will surface startup/auth errors. |
 | No effort picker | The selected model may not advertise effort, or discovery is still running. Use only variants returned by the current catalog. |
 | Node/adapter fails to start | Use an absolute `nodeExecutable`, ensure Node 22+, and rerun `npm ci`/build. A terminal's `PATH` can differ from the background service's. |
+| Native tools only appear after finishing, or show `title=toolu_…` | Update and rebuild the checkout referenced by the configured plugin package, then restart the service after active work finishes. Existing history retains its old display entries. |
 | Login works in a terminal but not in OpenCode | Confirm the server runs as the same OS user and uses the intended Claude executable/environment. |
 | Plugin/MCP tool missing | Check the session's available tools and upstream MCP connection/sign-in in OpenCode. Catalog changes apply on a subsequent user turn; try a new session after configuration changes. |
 | RTK does not affect a command | Check whether Claude used a native tool or a relayed OpenCode shell tool. Only the latter passes through the OpenCode RTK hook. |
@@ -559,7 +568,7 @@ Run them from the affected project; catalog/configuration is location-scoped. Fo
 - **OpenCode-side compaction and auxiliary generation fail explicitly.** Claude manages its own context; the host can still reach its separate context limit.
 - **Usage depends on ACP reporting.** Missing/interrupted-turn totals and historical usage cannot be reconstructed. ACP cost is shown by `/claude-usage`, separately from OpenCode's price-table dollar counter. Context capacity updates when reported; output-token limits remain OpenCode defaults. See [Usage, cost, and token limits](#usage-cost-and-token-limits).
 - **Not every plugin applies.** Host HTTP/system/compaction hooks do not control Claude's internal requests/history. Native Claude tools bypass host tool hooks.
-- Native mode selectors, slash-command discovery, in-progress native tool rendering, and native edit-review UI are not implemented.
+- Native mode selectors, slash-command discovery, and native edit-review UI are not implemented.
 - Unsupported binary documents and direct remote media references are not converted into model-readable content.
 - The implementation targets the pinned Claude adapter's configuration-options API, not every ACP agent or arbitrary OpenCode version.
 - Desktop/web **shared-server API behavior is integration-tested**. Automated visual browser verification remains outstanding; the user has confirmed model selection works in the installed clients.
@@ -609,6 +618,7 @@ The tests use a protocol fixture through the **real OpenCode host and HTTP serve
 
 | Test | Coverage |
 | --- | --- |
+| [`test/activity.test.mjs`](test/activity.test.mjs) | Pending and concurrent running tools observed before fixture completion, refined titles/inputs, sparse and duplicate results, approval handoffs, cancellation, and missing terminal status. |
 | [`test/host.test.mjs`](test/host.test.mjs) | Model discovery/visibility metadata, model-specific effort, switching/default reset, streaming, continuity, approval/denial/dismissal, cancellation, native reload/isolation, and DCP marker handling. |
 | [`test/permissions.test.mjs`](test/permissions.test.mjs) | Bounded approval summaries, omitted file bodies, adapter-specific persistent choice IDs, rejection of unoffered choices, queued/session-wide approvals, reconnect persistence, session isolation, and automatic approval configuration. |
 | [`test/http.test.mjs`](test/http.test.mjs) | Loading the configured local plugin directory; shared model/session/approval APIs across two clients; image/text attachment transport and history; native token accounting across approvals, learned context limits, and local usage reports without Claude requests. |
@@ -642,6 +652,7 @@ These checks have passed locally with the bundled adapter/CLI. They use temporar
 | [`src/provider.ts`](src/provider.ts) | Native model transport and stream cancellation. |
 | [`src/acp.ts`](src/acp.ts) | Subprocess lifecycle, protocol connection, and session/model/effort negotiation. |
 | [`src/bridge.ts`](src/bridge.ts) | History tracking, event translation, tool/approval continuation, and scoped guidance. |
+| [`src/native-tools.ts`](src/native-tools.ts) | Native activity state, partial ACP updates, and display continuity across host steps. |
 | [`src/tool-relay.ts`](src/tool-relay.ts) | Session-scoped MCP server and host-result conversion. |
 | [`src/attachments.ts`](src/attachments.ts) | Text/image conversion for new prompts and history. |
 | [`src/prompt.ts`](src/prompt.ts) | Removal of verified generated message-ID suffixes. |

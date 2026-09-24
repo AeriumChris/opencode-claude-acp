@@ -10,6 +10,7 @@ import { contentBlocks } from './attachments.js';
 import { ToolRelay, toolError, toolResult } from './tool-relay.js';
 import { UsageLedger, formatUsage, type UsageReport } from './usage.js';
 import { allowPermission, permissionChoices, permissionResponse, permissionSummary, type Approval } from './permissions.js';
+import { NativeTools } from './native-tools.js';
 
 type Saved = { sessionID: string; directory: string; users: string[]; allowAll?: boolean };
 type Pending = { token: string; request: RequestPermissionRequest; answer?: Approval;
@@ -17,7 +18,7 @@ type Pending = { token: string; request: RequestPermissionRequest; answer?: Appr
 type ToolCall = { token: string; name: string; input: unknown; started: boolean; resolve(result: CallToolResult): void };
 type Packet = { update: SessionUpdate } | { permission: Pending } | { tool: ToolCall };
 type Turn = { queue: Queue<Packet>; permissions: Map<string, Pending>; tools: Map<string, ToolCall>;
-  paused?: Pending | ToolCall; streaming: boolean; stopReason?: string; usage?: unknown; report: UsageReport };
+  nativeTools: NativeTools; paused?: Pending | ToolCall; streaming: boolean; stopReason?: string; usage?: unknown; report: UsageReport };
 type Entry = { acp: AcpConnection; relay: ToolRelay; catalog: string; deliveredInstructions: string;
   ready: Promise<void>; users: string[]; allowAll?: boolean; turn?: Turn; idle?: NodeJS.Timeout };
 
@@ -251,7 +252,7 @@ export class Bridge {
         // Persist before sending: automatic retries must not duplicate agent-side effects.
         await this.storage.set(sessionID, { sessionID: entry.acp.sessionID, directory, users: fingerprints, allowAll: entry.allowAll });
         const report = await this.usage.begin(sessionID, entry.acp.sessionID, modelID);
-        const turn: Turn = { queue: new Queue(), permissions: new Map(), tools: new Map(), streaming: false, report };
+        const turn: Turn = { queue: new Queue(), permissions: new Map(), tools: new Map(), nativeTools: new NativeTools(), streaming: false, report };
         entry.turn = turn;
         void entry.acp.connection.agent.request('session/prompt', { sessionId: entry.acp.sessionID, prompt }).then(
           (result) => { turn.stopReason = result.stopReason; turn.usage = result.usage; turn.queue.close(); },
@@ -261,9 +262,11 @@ export class Bridge {
       const turn = entry.turn!;
       turn.streaming = true;
       yield LLMEvent.stepStart({ index: 0 });
+      yield* turn.nativeTools.resume();
       for await (const packet of turn.queue) {
         if ('tool' in packet) {
           yield* endBlock();
+          yield* turn.nativeTools.pause(`Waiting for OpenCode tool: ${packet.tool.name}. Native operation has not finished.`);
           turn.paused = packet.tool;
           yield LLMEvent.toolCall({ id: packet.tool.token, name: packet.tool.name, input: packet.tool.input });
           paused = true;
@@ -274,12 +277,14 @@ export class Bridge {
         if ('permission' in packet) {
           yield* endBlock();
           const pending = packet.permission;
+          yield* turn.nativeTools.update({ ...pending.request.toolCall, sessionUpdate: 'tool_call_update' });
           if (entry.allowAll || this.options.permissionMode === 'allow') {
             pending.resolve(allowPermission(pending.request));
             turn.permissions.delete(pending.token);
             continue;
           }
           turn.paused = pending;
+          yield* turn.nativeTools.pause('Waiting for approval in OpenCode. Native operation has not finished.');
           yield LLMEvent.toolCall({ id: pending.token, name: 'question', input: { questions: [{
             header: 'Claude ACP approval', multiple: false,
             question: permissionSummary(pending.request),
@@ -306,16 +311,12 @@ export class Bridge {
           }
           yield kind === 'text' ? LLMEvent.textDelta({ id: block!.id, text: update.content.text }) : LLMEvent.reasoningDelta({ id: block!.id, text: update.content.text });
         } else if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
-          // Keep ACP-owned tools visible without asking OpenCode to execute them again.
-          if (update.status === 'completed' || update.status === 'failed') {
-            yield* endBlock();
-            const id = `claude_${update.toolCallId}`;
-            yield LLMEvent.toolCall({ id, name: 'claude_code', input: update.rawInput ?? { title: update.title ?? update.toolCallId }, providerExecuted: true });
-            yield LLMEvent.toolResult({ id, name: 'claude_code', result: { type: update.status === 'failed' ? 'error' : 'json', value: update.rawOutput ?? update.content ?? update.status }, providerExecuted: true });
-          }
+          yield* endBlock();
+          yield* turn.nativeTools.update(update);
         }
       }
       yield* endBlock();
+      yield* turn.nativeTools.finish();
       const usage = await this.usage.finish(sessionID, turn.report, turn.usage);
       completed = true;
       entry.turn = undefined;
