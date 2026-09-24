@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -9,6 +9,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Effect } from 'effect';
 import { ServerProcess } from '@opencode/server/process';
 import { OpenCode } from '@opencode/client';
+import { screenshot } from './fixtures/image.mjs';
+import { bridges } from '../dist/registry.js';
 
 test('HTTP clients share the provider catalog, session output, and approval forms', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(process.env.OPENCODE_TEST_TMP ?? tmpdir(), 'acp-http-'));
@@ -58,6 +60,33 @@ test('HTTP clients share the provider catalog, session output, and approval form
         const entries = (await readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
         assert.equal(entries.filter((entry) => entry.effective).at(-1).effective.effort, 'high', 'HTTP-selected effort reaches the ACP prompt');
         assert.equal(entries.filter((entry) => entry.method === 'session/prompt').length, 1, 'approval does not replay the prompt');
+
+        const image = screenshot().toString('base64');
+        const textFile = join(directory, 'notes.txt');
+        await writeFile(textFile, 'Attached text reaches Claude.');
+        await first.session.prompt({ sessionID, text: 'Review the screenshot and notes.', files: [
+          { uri: `data:image/png;base64,${image}`, name: 'screen.png' },
+          { uri: pathToFileURL(textFile).href, name: 'notes.txt' },
+        ] });
+        await first.session.wait({ sessionID });
+        const prompts = async () => (await readFile(log, 'utf8')).trim().split('\n').map(JSON.parse).filter((entry) => entry.method === 'session/prompt');
+        let sent = (await prompts()).at(-1).params.prompt;
+        assert.deepEqual(sent.filter((part) => part.type === 'image'), [{ type: 'image', data: image, mimeType: 'image/png' }]);
+        assert.match(JSON.stringify(sent), /Attached image: screen.png/);
+        assert.match(JSON.stringify(sent), /Attached text reaches Claude/);
+        const received = await second.session.context({ sessionID });
+        assert(received.some((message) => message.type === 'user' && message.files?.some((file) => file.name === 'screen.png')));
+
+        await first.session.prompt({ sessionID, text: 'Follow up about the image.' });
+        await first.session.wait({ sessionID });
+        assert.equal((await prompts()).at(-1).params.prompt.filter((part) => part.type === 'image').length, 0, 'warm follow-up does not resend images');
+        // Simulate a fresh native session with the existing OpenCode transcript.
+        for (const bridge of bridges.values()) await bridge.reset(sessionID);
+        await first.session.prompt({ sessionID, text: 'Continue from existing history.' });
+        await first.session.wait({ sessionID });
+        sent = (await prompts()).at(-1).params.prompt;
+        assert.equal(sent.filter((part) => part.type === 'image').length, 1, 'history bootstrap retains the earlier screenshot');
+        assert.match(JSON.stringify(sent), /conversation_history/);
       });
     })));
   } finally {

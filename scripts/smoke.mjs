@@ -1,6 +1,8 @@
 import { OpenCode } from '@opencode/sdk';
 import { createPlugin } from '../dist/index.js';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { randomInt, randomUUID } from 'node:crypto';
+import { screenshot } from '../test/fixtures/image.mjs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -30,6 +32,43 @@ try {
   if (!JSON.stringify(assistant).includes('ACP_READY')) throw new Error(`Live Claude smoke failed: ${JSON.stringify(context)}`);
   console.log('Live Claude → ACP → OpenCode: ACP_READY');
   if (effort) console.log(`Selected effort: ${effort}`);
+  if (process.argv.includes('--attachments')) {
+    const colors = [{ name: 'RED', rgb: [255, 0, 0] }, { name: 'GREEN', rgb: [0, 180, 0] }, { name: 'BLUE', rgb: [0, 0, 255] }];
+    const color = colors[randomInt(colors.length)];
+    const attachedToken = randomUUID(), repoToken = randomUUID();
+    const file = join(directory, 'repo-check.txt');
+    await writeFile(file, repoToken);
+    const before = (await host.sessions.context({ sessionID: session.id })).length;
+    await host.sessions.prompt({ sessionID: session.id,
+      text: 'Identify the color of the large rectangle in the screenshot. Also report the token in the attached notes, and use your Read tool to read repo-check.txt in the current project and report its token. Do not edit files or run shell commands.',
+      files: [
+        { uri: `data:image/png;base64,${screenshot(color.rgb).toString('base64')}`, name: 'screen.png' },
+        { uri: `data:text/plain;base64,${Buffer.from(attachedToken).toString('base64')}`, name: 'notes.txt' },
+      ],
+    });
+    let settled = false;
+    const waiting = host.sessions.wait({ sessionID: session.id }).finally(() => { settled = true; });
+    const deadline = Date.now() + 120_000;
+    while (!settled && Date.now() < deadline) {
+      for (const form of await host.session.form.list({ sessionID: session.id })) {
+        const description = form.fields[0]?.description ?? '';
+        let input;
+        try { input = JSON.parse(description.split('\n\n')[1]); } catch {}
+        const allowed = /Read/.test(description.split('\n\n')[0]) && typeof input?.file_path === 'string' && resolve(directory, input.file_path) === resolve(file);
+        await host.session.form.reply({ sessionID: session.id, formID: form.id, answer: { q0: allowed ? 'Allow once' : 'Deny' } });
+      }
+      await delay(100);
+    }
+    if (!settled) await host.sessions.interrupt({ sessionID: session.id });
+    await waiting;
+    const messages = (await host.sessions.context({ sessionID: session.id })).slice(before).filter((message) => message.type === 'assistant');
+    const reply = messages.flatMap((message) => message.content.filter((part) => part.type === 'text').map((part) => part.text)).join('\n');
+    if (!reply.toUpperCase().includes(color.name) || !reply.includes(attachedToken) || !reply.includes(repoToken)) {
+      throw new Error(`Attachment/repository read smoke failed: ${reply}`);
+    }
+    if (!messages.some((message) => message.content.some((part) => part.type === 'tool' && part.executed === true))) throw new Error('No native repository read tool result.');
+    console.log('Live screenshot vision + attached text + native repository read: verified');
+  }
   if (process.argv.includes('--tools')) {
     const file = join(directory, 'acp-smoke.txt');
     const content = 'ACP_FILE_READY\n';

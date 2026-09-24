@@ -5,6 +5,7 @@ import { AcpConnection, effortChoices, modelChoices, type ModelChoice } from './
 import type { Options } from './options.js';
 import { Queue } from './queue.js';
 import { cleanMessages } from './prompt.js';
+import { contentBlocks } from './attachments.js';
 
 type Saved = { sessionID: string; directory: string; users: string[] };
 type Pending = { token: string; request: RequestPermissionRequest; answer?: boolean;
@@ -19,7 +20,6 @@ export interface Persistence {
   remove(key: string): Promise<void>;
 }
 const hash = (message: Message) => createHash('sha256').update(JSON.stringify(message.content)).digest('hex');
-const text = (message: Message) => message.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
 
 export class Bridge {
   private entries = new Map<string, Entry>();
@@ -157,22 +157,17 @@ export class Bridge {
         const prompt: ContentBlock[] = [];
         if (!entry.users.length && messages.length > 1) {
           const lastUser = messages.lastIndexOf(users.at(-1)!);
-          const history = messages.slice(0, lastUser).map((message) => `${message.role}: ${text(message)}`).join('\n\n');
-          if (history) prompt.push({ type: 'text', text: `Prior conversation, supplied as historical context. Do not re-execute old instructions:\n<conversation_history>\n${history}\n</conversation_history>` });
+          prompt.push({ type: 'text', text: 'Prior conversation, supplied as historical context. Do not re-execute old instructions:\n<conversation_history>' });
+          for (const message of messages.slice(0, lastUser)) {
+            const parts = contentBlocks(message, entry.acp.supportsImages);
+            if (parts.length) prompt.push({ type: 'text', text: `${message.role}:` }, ...parts);
+          }
+          prompt.push({ type: 'text', text: '</conversation_history>' });
         }
         // Claude owns its system prompt/tools/CLAUDE.md. OpenCode's tool instructions are not forwarded.
         const newUsers = entry.users.length ? users.slice(entry.users.length) : users.slice(-1);
         for (const message of newUsers) {
-          for (const part of message.content) {
-            if (part.type === 'text') prompt.push({ type: 'text', text: part.text });
-            else if (part.type === 'media') {
-              const source = part.media.source;
-              if (!entry.acp.supportsImages || !part.media.mediaType.startsWith('image/')) throw new Error('This ACP session does not support the attached media.');
-              if (source.type === 'base64') prompt.push({ type: 'image', data: source.data, mimeType: part.media.mediaType });
-              else if (source.type === 'bytes') prompt.push({ type: 'image', data: Buffer.from(source.data).toString('base64'), mimeType: part.media.mediaType });
-              else throw new Error('Claude ACP requires inline image data; remote media references are not supported.');
-            }
-          }
+          prompt.push(...contentBlocks(message, entry.acp.supportsImages));
         }
         entry.users = fingerprints;
         // Persist before sending: automatic retries must not duplicate agent-side effects.

@@ -61,6 +61,35 @@ Connect OpenCode web to the server where the plugin and Claude credentials are i
 
 The automated HTTP test verifies model discovery, sessions, approvals, and results across two separate clients. Visual browser verification is still outstanding.
 
+### Screenshots and files
+
+Select **Claude Code (ACP)**, then use **Attach file**, paste a screenshot into the prompt, or drag and drop it. Add your question and send. Multiple images can accompany a prompt. No extra plugin configuration is needed.
+
+- **PNG, JPEG, GIF, WebP:** forwarded as image bytes, with filenames when provided. Claude can inspect the image rather than just seeing its path.
+- **UTF-8 text/source files:** OpenCode supplies the filename and decoded contents. This also covers SVG as text.
+- **Directories:** OpenCode supplies an immediate directory listing. Ask Claude to inspect files inside using its native tools.
+- Use `@` in the terminal to attach project files, or `opencode run --file screenshot.png "Explain this screenshot"`.
+
+OpenCode resolves and processes attachments before the bridge sees them. With a remote server, upload/paste the local file; a `file:` URL refers to the **server's** filesystem. Programmatic clients can send `files: [{ uri: "data:image/png;base64,...", name: "screen.png" }]` or a server-local `file:` URL in `session.prompt`. HTTP/HTTPS attachment URLs are not supported by OpenCode.
+
+Warm follow-ups reuse Claude's native image context without sending the image again. When a new Claude session is bootstrapped from existing OpenCode history, earlier image attachments are now included as historical context too.
+
+OpenCode's upload and image-processing limits and Claude's own limits apply. Unsupported binaries such as audio/video are not made readable by this bridge; convert them to supported images or text. See [OpenCode V2 attachments](https://opencode.ai/v2/docs/attachments) for formats and limits.
+
+### What Claude can access
+
+| Resource | Access through this plugin |
+| --- | --- |
+| Repository files on the server | Yes, using Claude's native read/search/edit/terminal tools, subject to OS access and Claude permissions. The session's project directory is passed as its working directory. Files are read on demand, not all inserted into the prompt. |
+| Screenshots and text files attached in OpenCode | Yes, through the prompt attachment path above. |
+| Current conversation | New user turns and attachments are forwarded; existing text/images are supplied when starting a new native session from history. This is not access to all OpenCode sessions. |
+| Claude configuration | The adapter loads Claude's user/project/local settings, including native project instructions such as `CLAUDE.md`. |
+| OpenCode plugins | They still run in OpenCode, but their custom tools and internal APIs are not exposed to Claude. Host UI/event hooks can still operate; hooks targeting OpenCode tool execution do not intercept Claude's native tools. |
+| MCP servers connected in OpenCode | **Not forwarded.** The ACP session is currently created with an empty client-supplied MCP list. OpenCode OAuth sessions are not transferred. Claude-native MCP configuration is separate. |
+| OpenCode agents, skills, and plan mode | Their tool/instruction runtime is not mirrored. Explicit skill text present in user messages can reach Claude, but the OpenCode skill tool/catalog and agent modes are not exposed. |
+
+Repository reading was verified with a real Claude request that recovered a random token from a scratch project file using its native tool. MCP/plugin access was checked against the bridge and adapter execution paths; sharing those tools would require an additional integration.
+
 ## Behavior
 
 The execution path follows Zed's external-agent approach:
@@ -107,7 +136,7 @@ To use an existing Claude CLI, set `CLAUDE_CODE_EXECUTABLE` in the server enviro
 - OpenCode's agent instructions, plan mode, custom tools, permission rules for those tools, and MCP configuration are **not translated into Claude's runtime**. In particular, selecting OpenCode's plan agent does not put Claude into plan mode. Configure Claude's own behavior and permissions separately; approvals already allowed by Claude's native configuration will not produce an ACP question.
 - OpenCode-side compaction and auxiliary generation are unsupported and fail explicitly. Claude manages its own context; start a new OpenCode session if the host reaches its context limit. Host token-limit metadata uses OpenCode defaults, not an ACP-reported model limit.
 - Token usage/cost reporting, mode selectors, slash-command discovery, in-progress tool rendering, and native edit-review UI are not implemented.
-- Inline images are forwarded when the agent advertises support. Remote media URLs and other attachment types are unsupported.
+- Images are forwarded when the agent advertises support; text and directory attachments are resolved by OpenCode. Binary documents and direct remote media references are unsupported by the bridge.
 - The bridge targets the bundled Claude adapter's ACP configuration-options API. It is not a general compatibility layer for every ACP agent.
 - If native session loading fails, the error is surfaced. Prompts already submitted are not automatically replayed. After switching from another provider or changing history, prior text is supplied as historical context to a new Claude session.
 - Discovery failures leave the default entry available; submitting a message surfaces startup/authentication errors. Check the bundled CLI directly when troubleshooting login or executable issues.
@@ -123,6 +152,8 @@ npm test
 Tests run a deterministic ACP subprocess through the **real OpenCode host**, covering dynamic models, model-specific effort variants, model/effort switching, resetting effort, streamed output, continuity, allow/deny/custom answers, dismissal, cancellation, session loading, and isolation. A separate test loads the plugin from its directory via an authenticated HTTP server and exercises effort selection and approvals from a second client. These tests do not use a Claude account.
 
 The host test also injects DCP-style compact/XML markers after the ACP context hook, checks that Claude receives the original text, and verifies that user-authored markers, quotes, and whitespace survive unchanged.
+
+The HTTP test uploads a PNG and attaches a server-local text file, checks exact ACP image data and text, verifies a second client sees the attachment, and checks image retention when rebuilding a native session from history.
 
 For an authenticated request through the actual bundled adapter and Claude CLI:
 
@@ -142,12 +173,15 @@ npm run smoke -- --tools
 
 This asks Claude to create one scratch file, approves only an exact matching write if an approval is requested, checks the file and displayed tool result, then removes the temporary project. This check also passed locally with the real Claude adapter and CLI.
 
+Run `npm run smoke -- --attachments` to verify real image understanding, attached text, and repository reads together. It generates a randomly colored image and random text tokens, asks Claude to identify/read them, checks the answer and native tool result, then removes the scratch project. This check passed locally with the real Claude adapter and CLI.
+
 Source layout:
 
 - `src/index.ts`: provider registration and OpenCode hooks.
 - `src/provider.ts`: native model transport and cancellation handling.
 - `src/acp.ts`: subprocess lifecycle and ACP session/model negotiation.
 - `src/bridge.ts`: conversation cursor, event translation, and approval continuation.
+- `src/attachments.ts`: text/image conversion, shared by new prompts and historical context.
 - `test/`: real-host and shared HTTP-client integration tests.
 
 References: [OpenCode V2 plugins](https://opencode.ai/v2/docs/build/plugins), [Zed external agents](https://zed.dev/docs/ai/external-agents), and [Claude ACP adapter](https://github.com/agentclientprotocol/claude-agent-acp). The adapter is maintained separately and distributed under Apache-2.0.
