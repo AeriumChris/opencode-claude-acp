@@ -1,0 +1,59 @@
+// An actual stdio ACP peer: deterministic fixture only, never used by the plugin.
+import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+
+let sessionId;
+let model = 'fixture-model';
+let nextID = 1000;
+const pending = new Map();
+const prompts = new Map();
+const log = (entry) => process.env.ACP_TEST_LOG && appendFileSync(process.env.ACP_TEST_LOG, `${JSON.stringify({ pid: process.pid, ...entry })}\n`);
+const send = (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
+const result = (id, value) => send({ id, result: value });
+const update = (value) => send({ method: 'session/update', params: { sessionId, update: value } });
+const config = () => [{ id: 'model', name: 'Model', type: 'select', category: 'model', currentValue: model,
+  options: [{ value: 'fixture-model', name: 'Fixture Claude' }, { value: 'fixture-other', name: 'Other fixture model' }] }];
+async function handle(message) {
+  const { id, method, params = {} } = message;
+  if (!method) { pending.get(id)?.(message.result); pending.delete(id); return; }
+  log({ method, params });
+  if (method === 'initialize') return result(id, { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: true } } });
+  if (method === 'session/new') { sessionId = randomUUID(); return result(id, { sessionId, configOptions: config() }); }
+  if (method === 'session/load') { sessionId = params.sessionId; return result(id, { configOptions: config() }); }
+  if (method === 'session/set_config_option') { model = params.value; return result(id, { configOptions: config() }); }
+  if (method === 'session/cancel') {
+    for (const [promptID] of prompts) result(promptID, { stopReason: 'cancelled' });
+    prompts.clear();
+    return;
+  }
+  if (method === 'session/prompt') {
+    prompts.set(id, true);
+    const text = params.prompt.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
+    if (text === 'hang') return;
+    update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Fixture thinking.' } });
+    if (text.startsWith('permission')) {
+      const toolCallId = randomUUID();
+      const requestID = nextID++;
+      const response = await new Promise((resolve) => {
+        pending.set(requestID, resolve);
+        send({ id: requestID, method: 'session/request_permission', params: { sessionId,
+          toolCall: { toolCallId, title: 'Write fixture.txt', kind: 'edit', rawInput: { path: 'fixture.txt' } },
+          options: [{ optionId: 'yes', kind: 'allow_once', name: 'Allow once' }, { optionId: 'no', kind: 'reject_once', name: 'Deny' }],
+        } });
+      });
+      log({ permissionResult: response });
+      if (!prompts.has(id)) return;
+      const approved = response.outcome.outcome === 'selected' && response.outcome.optionId === 'yes';
+      update({ sessionUpdate: 'tool_call_update', toolCallId, title: 'Write fixture.txt', status: approved ? 'completed' : 'failed', rawOutput: approved ? 'written' : 'denied' });
+      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: approved ? 'Approved operation completed.' : 'Operation denied.' } });
+    } else update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `fixture:${text}` } });
+    prompts.delete(id);
+    result(id, { stopReason: 'end_turn' });
+    return;
+  }
+  if (id !== undefined) send({ id, error: { code: -32601, message: `Unknown method: ${method}` } });
+}
+for await (const line of createInterface({ input: process.stdin })) {
+  void handle(JSON.parse(line)).catch((error) => { console.error(error); process.exitCode = 1; });
+}

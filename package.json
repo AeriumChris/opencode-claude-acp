@@ -1,0 +1,43 @@
+{
+  "name": "opencode-claude-acp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code over ACP in OpenCode's terminal and web model selectors",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./server": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "server.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.81.1",
+    "@agentclientprotocol/sdk": "1.5.0",
+    "@opencode/ai": "2.0.15",
+    "@opencode/schema": "2.0.15",
+    "effect": "4.0.0-rc.112"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": "2.0.15"
+  },
+  "devDependencies": {
+    "@opencode/client": "2.0.15",
+    "@opencode/plugin": "2.0.15",
+    "@opencode/sdk": "2.0.15",
+    "@opencode/server": "2.0.15",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
