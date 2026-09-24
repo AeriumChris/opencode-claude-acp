@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ContentBlock, RequestPermissionRequest, RequestPermissionResponse, SessionUpdate } from '@agentclientprotocol/sdk';
 import { LLMEvent, type LLMRequest, type Message } from '@opencode/ai';
-import { AcpConnection, modelChoices, type ModelChoice } from './acp.js';
+import { AcpConnection, effortChoices, modelChoices, type ModelChoice } from './acp.js';
 import type { Options } from './options.js';
 import { Queue } from './queue.js';
 
@@ -33,7 +33,23 @@ export class Bridge {
       update() {}, permission: async () => ({ outcome: { outcome: 'cancelled' } }), close() {},
     });
     this.discoveries.add(acp);
-    try { await acp.start(); if (!this.closed) this.inventory(modelChoices(acp.config)); }
+    try {
+      await acp.start();
+      const models = modelChoices(acp.config);
+      // The thought_level option belongs to the currently selected model. Probe
+      // choices in this disposable session, never in a user's active turn.
+      if (!models.some((model) => model.id === 'default')) {
+        models.unshift({ id: 'default', name: 'Claude Code — default (ACP)', efforts: effortChoices(acp.config) });
+      }
+      if (!this.closed) this.inventory(models);
+      for (const model of models) {
+        if (this.closed) break;
+        try {
+          await acp.selectModel(model.id);
+          if (!this.closed) this.inventory([{ ...model, efforts: effortChoices(acp.config) }]);
+        } catch { /* A temporarily unavailable model must not hide other choices. */ }
+      }
+    }
     finally { acp.close(); this.discoveries.delete(acp); }
   }
 
@@ -117,7 +133,6 @@ export class Bridge {
         entry.turn.permissions.delete(permission.token);
         entry.turn.paused = undefined;
       } else {
-        await entry.acp.selectModel(modelID);
         const users = request.messages.filter((message) => message.role === 'user');
         const fingerprints = users.map(hash);
         if (!users.length) throw new Error('Claude ACP requires a user message.');
@@ -125,9 +140,12 @@ export class Bridge {
           // Reverts/compaction invalidate the native session's chronological cursor.
           await this.reset(sessionID);
           entry = await this.entry(sessionID, directory);
-          await entry.acp.selectModel(modelID);
         }
         if (fingerprints.length === entry.users.length) throw new Error('Refusing to replay a Claude ACP prompt that was already submitted. Send a new message.');
+        await entry.acp.selectModel(modelID);
+        this.inventory(modelChoices(entry.acp.config));
+        const effort = request.providerOptions?.acpEffort;
+        await entry.acp.selectEffort(typeof effort === 'string' ? effort : 'default');
         const prompt: ContentBlock[] = [];
         if (!entry.users.length && request.messages.length > 1) {
           const lastUser = request.messages.lastIndexOf(users.at(-1)!);

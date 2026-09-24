@@ -47,6 +47,14 @@ opencode service restart
 
 Open the model selector and choose **Claude Code (ACP)**, then its default or an advertised Claude model. Discovery runs asynchronously, so the default entry may appear before the model list. Claude authentication is managed by Claude Code; this provider does not need an OpenCode API key.
 
+### Effort
+
+After selecting a model, use OpenCode's **effort/variant picker** to choose an advertised level. Options are discovered separately for each model from ACP's `thought_level` configuration. Models that do not advertise effort have no effort variants; choices may appear shortly after model discovery finishes.
+
+The selected effort is applied before the next new prompt and restored when a native session reconnects. Clearing the variant (Default) clears the explicit effort override and returns control to Claude's own defaults/settings. An in-progress prompt, including one paused for approval, keeps its original effort.
+
+The same model variants are available to terminal, desktop, and web clients. CLI references can include the advertised variant, for example `claude-acp/opus#high` when `high` is available.
+
 ### Web clients
 
 Connect OpenCode web to the server where the plugin and Claude credentials are installed, and open a project covered by that server's plugin configuration. The provider is registered in the server model catalog used by both clients. Files and commands execute in that project's directory **on the server**.
@@ -97,7 +105,7 @@ To use an existing Claude CLI, set `CLAUDE_CODE_EXECUTABLE` in the server enviro
 
 - OpenCode's agent instructions, plan mode, custom tools, permission rules for those tools, and MCP configuration are **not translated into Claude's runtime**. In particular, selecting OpenCode's plan agent does not put Claude into plan mode. Configure Claude's own behavior and permissions separately; approvals already allowed by Claude's native configuration will not produce an ACP question.
 - OpenCode-side compaction and auxiliary generation are unsupported and fail explicitly. Claude manages its own context; start a new OpenCode session if the host reaches its context limit. Host token-limit metadata uses OpenCode defaults, not an ACP-reported model limit.
-- Token usage/cost reporting, effort and mode selectors, slash-command discovery, in-progress tool rendering, and native edit-review UI are not implemented.
+- Token usage/cost reporting, mode selectors, slash-command discovery, in-progress tool rendering, and native edit-review UI are not implemented.
 - Inline images are forwarded when the agent advertises support. Remote media URLs and other attachment types are unsupported.
 - The bridge targets the bundled Claude adapter's ACP configuration-options API. It is not a general compatibility layer for every ACP agent.
 - If native session loading fails, the error is surfaced. Prompts already submitted are not automatically replayed. After switching from another provider or changing history, prior text is supplied as historical context to a new Claude session.
@@ -111,7 +119,7 @@ npm run build
 npm test
 ```
 
-Tests run a deterministic ACP subprocess through the **real OpenCode host**, covering dynamic models, model switching, streamed output, continuity, allow/deny/custom answers, dismissal, cancellation, session loading, and isolation. A separate test loads the plugin from its directory via an authenticated HTTP server and exercises approvals from a second client. These tests do not use a Claude account.
+Tests run a deterministic ACP subprocess through the **real OpenCode host**, covering dynamic models, model-specific effort variants, model/effort switching, resetting effort, streamed output, continuity, allow/deny/custom answers, dismissal, cancellation, session loading, and isolation. A separate test loads the plugin from its directory via an authenticated HTTP server and exercises effort selection and approvals from a second client. These tests do not use a Claude account.
 
 For an authenticated request through the actual bundled adapter and Claude CLI:
 
@@ -120,6 +128,8 @@ npm run smoke
 ```
 
 This sends a small prompt using your Claude account in a temporary project and expects `ACP_READY`. It was verified locally on Windows with OpenCode 2.0.15. Set `OPENCODE_TEST_TMP` to choose the parent directory for temporary verification projects.
+
+To verify an effort supported by the default model, run `npm run smoke -- --effort=high`. This uses the real adapter and CLI with that selected variant.
 
 To also verify actual file-tool execution and its OpenCode tool result:
 

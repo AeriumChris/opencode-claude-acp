@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 
 let sessionId;
 let model = 'fixture-model';
+let effort = 'default';
 let nextID = 1000;
 const pending = new Map();
 const prompts = new Map();
@@ -12,8 +13,12 @@ const log = (entry) => process.env.ACP_TEST_LOG && appendFileSync(process.env.AC
 const send = (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
 const result = (id, value) => send({ id, result: value });
 const update = (value) => send({ method: 'session/update', params: { sessionId, update: value } });
+const levels = () => model === 'fixture-no-effort' ? [] : model === 'fixture-other' ? ['default', 'low', 'max'] : ['default', 'low', 'medium', 'high'];
 const config = () => [{ id: 'model', name: 'Model', type: 'select', category: 'model', currentValue: model,
-  options: [{ value: 'fixture-model', name: 'Fixture Claude' }, { value: 'fixture-other', name: 'Other fixture model' }] }];
+  options: [{ value: 'fixture-model', name: 'Fixture Claude' }, { value: 'fixture-other', name: 'Other fixture model' },
+    { value: 'fixture-no-effort', name: 'No effort fixture' }] },
+  ...(levels().length ? [{ id: 'thinking-budget', name: 'Effort', type: 'select', category: 'thought_level', currentValue: effort,
+    options: [{ group: 'supported', name: 'Supported', options: levels().map((value) => ({ value, name: value })) }] }] : [])];
 async function handle(message) {
   const { id, method, params = {} } = message;
   if (!method) { pending.get(id)?.(message.result); pending.delete(id); return; }
@@ -21,13 +26,19 @@ async function handle(message) {
   if (method === 'initialize') return result(id, { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: true } } });
   if (method === 'session/new') { sessionId = randomUUID(); return result(id, { sessionId, configOptions: config() }); }
   if (method === 'session/load') { sessionId = params.sessionId; return result(id, { configOptions: config() }); }
-  if (method === 'session/set_config_option') { model = params.value; return result(id, { configOptions: config() }); }
+  if (method === 'session/set_config_option') {
+    if (params.configId === 'model') { model = params.value; if (!levels().includes(effort)) effort = 'default'; }
+    else if (params.configId === 'thinking-budget' && levels().includes(params.value)) effort = params.value;
+    else return send({ id, error: { code: -32602, message: 'Unsupported effort' } });
+    return result(id, { configOptions: config() });
+  }
   if (method === 'session/cancel') {
     for (const [promptID] of prompts) result(promptID, { stopReason: 'cancelled' });
     prompts.clear();
     return;
   }
   if (method === 'session/prompt') {
+    log({ effective: { sessionId, model, effort } });
     prompts.set(id, true);
     const text = params.prompt.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
     if (text === 'hang') return;

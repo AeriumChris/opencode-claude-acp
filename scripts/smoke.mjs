@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const directory = await mkdtemp(join(process.env.OPENCODE_TEST_TMP ?? tmpdir(), 'acp-live-'));
+const effort = process.argv.find((argument) => argument.startsWith('--effort='))?.slice('--effort='.length);
 const host = await OpenCode.create({
   database: { path: ':memory:' }, models: { fetch: false }, config: { directory, project: false, content: '{}' },
   fs: { filewatcher: false, fff: false }, log: { level: 'warn', emit: (entry) => console.error(entry) },
@@ -15,17 +16,20 @@ try {
   let found = false;
   for (let n = 0; n < 150; n++) {
     const models = (await host.model.list({ location: { directory } })).data.filter((model) => model.providerID === 'claude-acp');
-    if (models.length > 1) { console.log('Models:', models.map((model) => model.id)); found = true; break; }
+    if (models.length > 1 && (!effort || models.find((model) => model.id === 'default')?.variants.some((variant) => variant.id === effort))) {
+      console.log('Models:', models.map((model) => model.id)); found = true; break;
+    }
     await delay(200);
   }
-  if (!found) throw new Error('Claude ACP discovery failed. Check Claude login.');
-  const session = await host.sessions.create({ location: { directory }, model: { providerID: 'claude-acp', id: 'default' } });
+  if (!found) throw new Error('Claude ACP model/effort discovery failed. Check Claude login and the requested effort.');
+  const session = await host.sessions.create({ location: { directory }, model: { providerID: 'claude-acp', id: 'default', ...(effort ? { variant: effort } : {}) } });
   await host.sessions.prompt({ sessionID: session.id, text: 'Reply with exactly ACP_READY. Do not use any tools.' });
   await host.sessions.wait({ sessionID: session.id });
   const context = await host.sessions.context({ sessionID: session.id });
   const assistant = context.filter((message) => message.type === 'assistant');
   if (!JSON.stringify(assistant).includes('ACP_READY')) throw new Error(`Live Claude smoke failed: ${JSON.stringify(context)}`);
   console.log('Live Claude → ACP → OpenCode: ACP_READY');
+  if (effort) console.log(`Selected effort: ${effort}`);
   if (process.argv.includes('--tools')) {
     const file = join(directory, 'acp-smoke.txt');
     const content = 'ACP_FILE_READY\n';

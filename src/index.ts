@@ -19,18 +19,25 @@ export function createPlugin(options: Options = {}) {
     let choices: ModelChoice[] = [];
     let disposed = false;
     const bridge = new Bridge(parseOptions({ ...ctx.options, ...options }), ctx.storage, (models) => {
-      if (!models.length || disposed || JSON.stringify(models) === JSON.stringify(choices)) return;
-      choices = models;
+      if (!models.length || disposed) return;
+      const merged = new Map(choices.map((model) => [model.id, model]));
+      for (const model of models) merged.set(model.id, { ...merged.get(model.id), ...model });
+      const next = [...merged.values()];
+      if (JSON.stringify(next) === JSON.stringify(choices)) return;
+      choices = next;
       void ctx.provider.reload().catch(() => {});
     });
     bridges.set(instanceID, bridge);
     const registrations: { dispose(): Promise<void> }[] = [];
     registrations.push(await ctx.provider.transform((editor) => {
-      const models = [{ id: 'default', name: 'Claude Code — default (ACP)' }, ...choices.filter((item) => item.id !== 'default')];
+      const models = [{ ...choices.find((item) => item.id === 'default'), id: 'default', name: 'Claude Code — default (ACP)' },
+        ...choices.filter((item) => item.id !== 'default')];
       editor.add({ info: { ...Provider.Info.empty(providerID), name: 'Claude Code (ACP)', activation: 'enabled',
         package: new URL('./provider.js', import.meta.url).href, settings: { instanceID } },
         models: models.map((item) => ({ ...Model.Info.default(providerID, Model.ID.make(item.id)), name: item.name,
           family: Model.Family.make(`claude-acp/${item.id}`), time: { released: catalogRegisteredAt },
+          variants: (item.efforts ?? []).filter((effort) => effort.id !== 'default')
+            .map((effort) => ({ id: Model.VariantID.make(effort.id) })),
           capabilities: { tools: true, input: ['text', 'image'], output: ['text'] } })),
       });
     }));
@@ -39,6 +46,7 @@ export function createPlugin(options: Options = {}) {
       const session = await ctx.session.get({ sessionID: event.sessionID });
       event.options.acpSessionID = event.sessionID;
       event.options.acpDirectory = session.location.directory;
+      event.options.acpEffort = event.model.variant ?? 'default';
       const question = event.tools.question;
       if (!question) throw new Error('Claude ACP requires OpenCode’s built-in question tool for approvals. Enable it for this agent.');
       event.tools = { question };

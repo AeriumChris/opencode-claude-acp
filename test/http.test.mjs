@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -13,13 +13,14 @@ import { OpenCode } from '@opencode/client';
 test('HTTP clients share the provider catalog, session output, and approval forms', { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(process.env.OPENCODE_TEST_TMP ?? tmpdir(), 'acp-http-'));
   const password = randomUUID();
+  const log = join(directory, 'agent.jsonl');
   try {
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
       const server = yield* ServerProcess.start({ hostname: '127.0.0.1', port: 0, password,
         database: { path: ':memory:' }, models: { fetch: false }, fs: { filewatcher: false, fff: false },
         config: { directory, project: false, content: JSON.stringify({ plugins: [{
           package: pathToFileURL(resolve('.')).href,
-          options: { command: process.execPath, args: [resolve('test/fixtures/agent.mjs')] },
+          options: { command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log } },
         }] }) },
       });
       yield* Effect.promise(async () => {
@@ -36,8 +37,10 @@ test('HTTP clients share the provider catalog, session output, and approval form
           await delay(100);
         }
         assert(models.some((model) => model.providerID === 'claude-acp' && model.id === 'fixture-model'), JSON.stringify((await first.plugin.list({ location })).data.filter((item) => item.source.type !== 'builtin')));
+        assert.deepEqual(models.find((model) => model.providerID === 'claude-acp' && model.id === 'fixture-model').variants.map((variant) => variant.id), ['low', 'medium', 'high']);
         const session = await first.session.create({ location, model: { providerID: 'claude-acp', id: 'fixture-model' } });
         const sessionID = session.id;
+        await second.session.switchModel({ sessionID, model: { providerID: 'claude-acp', id: 'fixture-model', variant: 'high' } });
         await first.session.prompt({ sessionID, text: 'permission HTTP client' });
         let form;
         for (let n = 0; n < 100; n++) {
@@ -52,6 +55,9 @@ test('HTTP clients share the provider catalog, session output, and approval form
         const context = await second.session.context({ sessionID });
         assert.match(JSON.stringify(context), /Approved operation completed/);
         assert(context.some((message) => message.type === 'assistant' && message.content.some((part) => part.type === 'tool' && part.executed === true)));
+        const entries = (await readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
+        assert.equal(entries.filter((entry) => entry.effective).at(-1).effective.effort, 'high', 'HTTP-selected effort reaches the ACP prompt');
+        assert.equal(entries.filter((entry) => entry.method === 'session/prompt').length, 1, 'approval does not replay the prompt');
       });
     })));
   } finally {

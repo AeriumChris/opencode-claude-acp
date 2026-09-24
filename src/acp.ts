@@ -4,12 +4,20 @@ import { client, ndJsonStream, PROTOCOL_VERSION, type ClientConnection, type Req
   type RequestPermissionResponse, type SessionConfigOption, type SessionUpdate } from '@agentclientprotocol/sdk';
 import { command, type Options } from './options.js';
 
-export interface ModelChoice { id: string; name: string }
+export interface Choice { id: string; name: string }
+export interface ModelChoice extends Choice { efforts?: Choice[] }
+export function effortChoices(config: SessionConfigOption[]): Choice[] {
+  const option = config.find((item) => item.category === 'thought_level' && item.type === 'select');
+  if (!option || option.type !== 'select') return [];
+  return option.options.flatMap((item) => 'options' in item ? item.options : [item])
+    .map((item) => ({ id: item.value, name: item.name }));
+}
 export function modelChoices(config: SessionConfigOption[]): ModelChoice[] {
   const option = config.find((item) => item.category === 'model' && item.type === 'select');
   if (!option || option.type !== 'select') return [];
   return option.options.flatMap((item) => 'options' in item ? item.options : [item])
-    .map((item) => ({ id: item.value, name: item.name }));
+    .map((item) => ({ id: item.value, name: item.name,
+      ...(item.value === option.currentValue ? { efforts: effortChoices(config) } : {}) }));
 }
 
 export class AcpConnection {
@@ -99,6 +107,22 @@ export class AcpConnection {
     if (option.currentValue === id) return;
     const result = await this.connection.agent.request('session/set_config_option', {
       sessionId: this.sessionID, configId: option.id, value: id,
+    });
+    this.config = result.configOptions;
+  }
+
+  async selectEffort(value: string) {
+    const option = this.config.find((item) => item.category === 'thought_level' && item.type === 'select');
+    if (!option || option.type !== 'select') {
+      if (value === 'default') return;
+      throw new Error(`Claude ACP does not advertise effort ${value} for this model.`);
+    }
+    if (!effortChoices(this.config).some((item) => item.id === value)) {
+      throw new Error(`Claude ACP does not advertise effort ${value} for this model.`);
+    }
+    if (option.currentValue === value) return;
+    const result = await this.connection.agent.request('session/set_config_option', {
+      sessionId: this.sessionID, configId: option.id, value,
     });
     this.config = result.configOptions;
   }
