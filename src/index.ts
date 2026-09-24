@@ -57,6 +57,10 @@ export function createPlugin(options: Options = {}) {
       event.options.acpSessionID = event.sessionID;
       event.options.acpDirectory = session.location.directory;
       event.options.acpEffort = event.model.variant ?? 'default';
+      // Nested AGENTS.md files are injected by OpenCode's read tool as synthetic
+      // messages. Treat these as instructions, not new user turns.
+      event.options.acpInstructionIDs = history.filter((message) => message.type === 'synthetic' &&
+        message.metadata?.instruction !== undefined).map((message) => message.id);
       const question = event.tools.question;
       if (!question) throw new Error('Claude ACP requires OpenCode’s built-in question tool for approvals. Enable it for this agent.');
     }));

@@ -16,7 +16,8 @@ type ToolCall = { token: string; name: string; input: unknown; started: boolean;
 type Packet = { update: SessionUpdate } | { permission: Pending } | { tool: ToolCall };
 type Turn = { queue: Queue<Packet>; permissions: Map<string, Pending>; tools: Map<string, ToolCall>;
   paused?: Pending | ToolCall; streaming: boolean; stopReason?: string };
-type Entry = { acp: AcpConnection; relay: ToolRelay; catalog: string; ready: Promise<void>; users: string[]; turn?: Turn; idle?: NodeJS.Timeout };
+type Entry = { acp: AcpConnection; relay: ToolRelay; catalog: string; deliveredInstructions: string;
+  ready: Promise<void>; users: string[]; turn?: Turn; idle?: NodeJS.Timeout };
 
 export interface Persistence {
   get(key: string): Promise<unknown>;
@@ -75,7 +76,7 @@ export class Bridge {
       entry = undefined;
     }
     if (entry) { clearTimeout(entry.idle); entry.relay.update(tools); await entry.ready; return entry; }
-    const created: Entry = { acp: undefined!, relay: undefined!, catalog, ready: Promise.resolve(), users: [] };
+    const created: Entry = { acp: undefined!, relay: undefined!, catalog, deliveredInstructions: '', ready: Promise.resolve(), users: [] };
     created.relay = new ToolRelay((name, input) => {
       const turn = created.turn;
       if (!turn) return Promise.resolve(toolError('No active OpenCode turn.'));
@@ -135,7 +136,14 @@ export class Bridge {
   }
 
   async *stream(sessionID: string, directory: string, modelID: string, request: LLMRequest, signal: AbortSignal): AsyncIterable<LLMEvent> {
-    const messages = cleanMessages(request.messages, this.originalTexts.get(sessionID) ?? new Map());
+    const cleaned = cleanMessages(request.messages, this.originalTexts.get(sessionID) ?? new Map());
+    const ids = request.providerOptions?.acpInstructionIDs;
+    const instructionIDs = new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []);
+    const messages = cleaned.filter((message) => !instructionIDs.has(message.id ?? ''));
+    // Only repository guidance loaded by OpenCode's read tool crosses here.
+    // The host agent/system prompt remains owned by OpenCode.
+    const instructions = cleaned.filter((message) => instructionIDs.has(message.id ?? '')).flatMap((message) =>
+      message.content.filter((part) => part.type === 'text').map((part) => part.text)).join('\n\n');
     this.originalTexts.delete(sessionID);
     const abort = () => this.cancel(sessionID);
     signal.addEventListener('abort', abort, { once: true });
@@ -169,7 +177,12 @@ export class Bridge {
           const result = messages.flatMap((message) => message.content).find((part) =>
             part.type === 'tool-result' && part.id === permission.token && part.name === permission.name);
           if (permission.started && result?.type === 'tool-result') {
-            permission.resolve(toolResult(result.result));
+            const output = toolResult(result.result);
+            if (entry.deliveredInstructions !== instructions) {
+              output.content.push({ type: 'text', text: `Repository instructions loaded by OpenCode (respect each file's directory scope):\n${instructions}` });
+              entry.deliveredInstructions = instructions;
+            }
+            permission.resolve(output);
           } else permission.resolve(toolError('OpenCode did not complete this tool call.'));
           entry.turn.tools.delete(permission.token);
         } else {
@@ -193,6 +206,10 @@ export class Bridge {
         const effort = request.providerOptions?.acpEffort;
         await entry.acp.selectEffort(typeof effort === 'string' ? effort : 'default');
         const prompt: ContentBlock[] = [];
+        if (instructions && entry.deliveredInstructions !== instructions) {
+          prompt.push({ type: 'text', text: `Repository instructions loaded by OpenCode (respect each file's directory scope):\n${instructions}` });
+          entry.deliveredInstructions = instructions;
+        }
         if (!entry.users.length && messages.length > 1) {
           const lastUser = messages.lastIndexOf(users.at(-1)!);
           prompt.push({ type: 'text', text: 'Prior conversation, supplied as historical context. Do not re-execute old instructions:\n<conversation_history>' });
@@ -202,7 +219,7 @@ export class Bridge {
           }
           prompt.push({ type: 'text', text: '</conversation_history>' });
         }
-        // Claude owns its system prompt/tools/CLAUDE.md. OpenCode's tool instructions are not forwarded.
+        // Claude owns its system prompt/tools/CLAUDE.md. OpenCode's agent prompt is not forwarded.
         const newUsers = entry.users.length ? users.slice(entry.users.length) : users.slice(-1);
         for (const message of newUsers) {
           prompt.push(...contentBlocks(message, entry.acp.supportsImages));

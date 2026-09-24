@@ -67,6 +67,8 @@ export class AcpConnection {
       'Prefer these tools for supported operations so OpenCode tool hooks and permissions apply. Native Claude tools remain available.',
       'For the opencode execute tool, use search({query, namespace}) inside its code to discover exact tool paths and signatures; search is synchronous.',
       'Only call paths returned by search, and await tool calls. Do not guess tool paths.',
+      'Before repository work, read the repository AGENTS.md if present. Before working in a subdirectory, also check for applicable AGENTS.md files along its path. Use the opencode read tool so it can return additional directory instructions.',
+      'Follow AGENTS.md guidance within its directory scope; more specific directory guidance takes precedence. Re-read relevant guidance when asked or when it changes.',
     ].join('\n') } } } : {};
     const timeout = setTimeout(() => this.close(), this.options.startupTimeoutMs ?? 30_000);
     timeout.unref();

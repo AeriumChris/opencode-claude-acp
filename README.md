@@ -84,11 +84,20 @@ OpenCode's upload and image-processing limits and Claude's own limits apply. Uns
 | Screenshots and text files attached in OpenCode | Yes, through the prompt attachment path above. |
 | Current conversation | New user turns and attachments are forwarded; existing text/images are supplied when starting a new native session from history. This is not access to all OpenCode sessions. |
 | Claude configuration | The adapter loads Claude's user/project/local settings, including native project instructions such as `CLAUDE.md`. |
+| Repository `AGENTS.md` | Claude is instructed to read the root file and applicable nested files. Additional scoped guidance discovered by OpenCode's read tool is returned to the same Claude turn. |
 | OpenCode plugins | Available plugin tools are exposed through the `opencode` MCP relay. Calls execute in OpenCode with its before/after tool hooks; UI/event hooks continue running. Hooks do not intercept Claude's native tools. |
 | MCP servers connected in OpenCode | Available tools are callable through the relay, including through Code Mode's `execute`/`search`. OpenCode keeps ownership of the upstream connections and authentication; OAuth credentials are not copied into Claude. Claude-native MCP configuration remains separate. |
 | OpenCode agents, skills, and plan mode | Available skill/delegation tools can be called through the relay. Their results reach Claude, but OpenCode's agent system prompts and mode controls are not mirrored into Claude's agent loop. |
 
 Repository reading and plugin/MCP calls have been verified with real Claude requests, including a plugin's modified tool result and a token returned by an upstream MCP server.
+
+### Repository guidance
+
+Use the filename **`AGENTS.md`** (uppercase for case-sensitive filesystems). Claude is instructed to read it before repository work and check applicable nested files before working in their directories. Guidance is read through ordinary tools; `CLAUDE.md` continues to work through Claude's native configuration.
+
+When the OpenCode `read` tool discovers additional directory instructions, the bridge includes them with the tool result without restarting or repeating the active Claude prompt. Guidance retains its directory scope. Ask Claude to re-read relevant guidance after changing it; this is model-followed guidance, not an enforced filesystem restriction. Global OpenCode instructions and custom agent system prompts are not automatically imported.
+
+Full OpenCode agent-instruction forwarding and native Plan-mode mapping were tried together and dropped after a live request returned Anthropic's third-party extra-usage error. The narrower root/nested `AGENTS.md` test succeeded without that error. Billing is controlled by Anthropic and the authenticated account; a successful test does not establish which usage allowance was charged. The plugin does not select or guarantee a subscription-only billing pool.
 
 ### Plugin tools and MCP
 
@@ -168,6 +177,8 @@ The HTTP test uploads a PNG and attaches a server-local text file, checks exact 
 
 The relay test covers plugin before/after hooks, parallel calls, existing MCP connections, Code Mode discovery/execution, tool errors, hidden tools, native permission denial, question forms, cancellation, inline-image results, catalog refresh, and session/authentication isolation.
 
+The repository-guidance test checks root/nested `AGENTS.md` reads, guidance delivery in the original tool turn, follow-up continuity, and exclusion of unrelated OpenCode agent/global/system instructions.
+
 For an authenticated request through the actual bundled adapter and Claude CLI:
 
 ```sh
@@ -189,6 +200,8 @@ This asks Claude to create one scratch file, approves only an exact matching wri
 Run `npm run smoke -- --attachments` to verify real image understanding, attached text, and repository reads together. It generates a randomly colored image and random text tokens, asks Claude to identify/read them, checks the answer and native tool result, then removes the scratch project. This check passed locally with the real Claude adapter and CLI.
 
 Run `npm run smoke -- --plugins` to verify that the real Claude CLI calls an OpenCode plugin tool, receives its after-hook modification, and uses an existing OpenCode MCP connection. It checks random tokens known only to the tool implementations. This check also passed locally.
+
+Run `node scripts/smoke-agents.mjs` to verify root and nested `AGENTS.md` guidance with real Claude. It creates random tokens only in those files and checks that Claude includes both after reading a nested project file. This check passed locally; it uses your Claude account and does not verify the billing pool.
 
 Source layout:
 
