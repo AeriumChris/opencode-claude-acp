@@ -28,6 +28,19 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
     return data.some((model) => model.providerID === 'claude-acp' && model.id === 'fixture-model') && data;
   }, 'ACP models in the native model catalog');
   assert(inventory.some((model) => model.id === 'default' && model.providerID === 'claude-acp'));
+  // Desktop/web normalizes time.released into an ISO date, then defaults to
+  // models from the last six months, keeping only the newest in each family.
+  // An enabled API entry alone does not establish selector visibility.
+  const acpModels = inventory.filter((model) => model.providerID === 'claude-acp');
+  const recentFamilies = new Map();
+  for (const model of acpModels) {
+    const released = new Date(model.time.released).toISOString().slice(0, 10);
+    if (Math.abs(Date.now() - Date.parse(released)) < 180 * 24 * 60 * 60 * 1000) {
+      const prior = recentFamilies.get(model.family);
+      if (!prior || prior.time.released < model.time.released) recentFamilies.set(model.family, model);
+    }
+  }
+  assert.equal(recentFamilies.size, acpModels.length, 'every ACP choice survives the desktop/web default visibility filter');
   const session = await host.sessions.create({ location, model: { providerID: 'claude-acp', id: 'fixture-model' } });
   const sessionID = session.id;
   await host.sessions.prompt({ sessionID, text: 'hello' });

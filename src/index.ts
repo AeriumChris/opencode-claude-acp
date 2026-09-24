@@ -12,6 +12,10 @@ export function createPlugin(options: Options = {}) {
   return Plugin.define({ id: 'opencode-claude-acp', async setup(ctx) {
     const instanceID = randomUUID();
     const providerID = Provider.ID.make('claude-acp');
+    // ACP publishes rolling model choices, not launch dates. The desktop/web
+    // selector hides epoch-dated entries and keeps only one model per family.
+    // Date these catalog entries when registered, with one family per choice.
+    const catalogRegisteredAt = Date.now();
     let choices: ModelChoice[] = [];
     let disposed = false;
     const bridge = new Bridge(parseOptions({ ...ctx.options, ...options }), ctx.storage, (models) => {
@@ -26,6 +30,7 @@ export function createPlugin(options: Options = {}) {
       editor.add({ info: { ...Provider.Info.empty(providerID), name: 'Claude Code (ACP)', activation: 'enabled',
         package: new URL('./provider.js', import.meta.url).href, settings: { instanceID } },
         models: models.map((item) => ({ ...Model.Info.default(providerID, Model.ID.make(item.id)), name: item.name,
+          family: Model.Family.make(`claude-acp/${item.id}`), time: { released: catalogRegisteredAt },
           capabilities: { tools: true, input: ['text', 'image'], output: ['text'] } })),
       });
     }));

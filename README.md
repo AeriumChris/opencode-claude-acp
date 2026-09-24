@@ -69,6 +69,7 @@ Claude Code CLI
 
 - Claude owns the agent loop, its tools, and native project configuration such as `CLAUDE.md`.
 - Model choices come from ACP session configuration; Claude model IDs are not hardcoded.
+- Desktop/web defaults to recent entries, one per model family. ACP choices therefore use their catalog-registration time and separate families so they appear by default. This timestamp describes the catalog entry, not the underlying Claude model's launch date. Explicit client-side hidden-model preferences still take precedence.
 - Each OpenCode session has a separate ACP connection and native session identity. Follow-up messages reuse it; idle connections close after five minutes and reload saved sessions on demand.
 - Text and thought chunks stream into OpenCode. Completed/failed Claude tools appear as provider-executed `claude_code` results.
 - ACP permission requests become OpenCode **question forms** with **Deny** and **Allow once** choices. These work across clients. Only the exact affirmative answer recorded by the host's tool execution grants permission. Dismissal, interruption, and unexpected answers do not approve the operation.
