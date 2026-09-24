@@ -6,6 +6,7 @@ import { Bridge } from './bridge.js';
 import type { ModelChoice } from './acp.js';
 import { parseOptions, type Options } from './options.js';
 import { bridges } from './registry.js';
+import { Checkpoints } from './compaction.js';
 
 export type { Options } from './options.js';
 export function createPlugin(options: Options = {}) {
@@ -28,6 +29,7 @@ export function createPlugin(options: Options = {}) {
       void ctx.provider.reload().catch(() => {});
     });
     bridges.set(instanceID, bridge);
+    const checkpoints = new Checkpoints(ctx.storage);
     const registrations: { dispose(): Promise<void> }[] = [];
     registrations.push(await ctx.provider.transform((editor) => {
       const models = [{ ...choices.find((item) => item.id === 'default'), id: 'default', name: 'Claude Code — default (ACP)' },
@@ -43,9 +45,11 @@ export function createPlugin(options: Options = {}) {
       });
     }));
     registrations.push(await ctx.session.hook('context', async (event) => {
+      const projected = checkpoints.history(await ctx.session.context({ sessionID: event.sessionID }));
+      event.messages = await checkpoints.restore(event.messages, projected, event.model);
       if (event.model.providerID !== providerID) { await bridge.reset(event.sessionID); return; }
       const session = await ctx.session.get({ sessionID: event.sessionID });
-      const history = await ctx.session.context({ sessionID: event.sessionID });
+      const history = await checkpoints.expand(projected);
       const originals = new Map<string, string[]>();
       for (const message of history) {
         if (message.type === 'user') originals.set(message.id, [message.text,
@@ -96,9 +100,11 @@ export function createPlugin(options: Options = {}) {
     registrations.push(await ctx.session.hook('generate', () => {
       throw new Error('Claude ACP supports interactive sessions; auxiliary generation is not supported.');
     }, { providerID }));
-    registrations.push(await ctx.session.hook('compaction', () => {
-      throw new Error('OpenCode compaction is not supported by this ACP bridge. Claude Code manages its own context. Start a new session if the host context fills.');
-    }, { providerID }));
+    registrations.push(await ctx.session.hook('compaction', async (event) => {
+      const history = checkpoints.history(await ctx.session.context({ sessionID: event.sessionID }));
+      if (event.model.providerID === providerID) event.result = await checkpoints.create(history);
+      else event.messages = await checkpoints.restore(event.messages, history, event.model);
+    }));
     registrations.push(await ctx.session.hook('retry', (event) => { event.decision = { retry: false }; }, { providerID }));
     registrations.push(await ctx.tool.hook('execute.before', (event) => {
       bridge.toolStarted(event.sessionID, event.id, event.tool);

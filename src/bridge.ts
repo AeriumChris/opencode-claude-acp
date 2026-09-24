@@ -220,7 +220,8 @@ export class Bridge {
         const fingerprints = users.map(hash);
         if (!users.length) throw new Error('Claude ACP requires a user message.');
         if (entry.users.some((value, index) => fingerprints[index] !== value)) {
-          // Reverts/compaction invalidate the native session's chronological cursor.
+          // Reverts or external history edits invalidate the native cursor.
+          // Our checkpoints restore original messages before reaching this point.
           await this.reset(sessionID);
           entry = await this.entry(sessionID, directory, request.tools);
         }

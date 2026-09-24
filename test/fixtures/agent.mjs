@@ -28,7 +28,7 @@ async function handle(message) {
   const { id, method, params = {} } = message;
   if (!method) { pending.get(id)?.(message.result); pending.delete(id); return; }
   log({ method, params });
-  if (method === 'initialize') return result(id, { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: true }, mcpCapabilities: { http: true } } });
+  if (method === 'initialize') return result(id, { protocolVersion: 1, agentCapabilities: { loadSession: process.env.ACP_TEST_NO_LOAD !== '1', promptCapabilities: { image: true }, mcpCapabilities: { http: true } } });
   if (method === 'session/new') { servers = params.mcpServers; sessionId = randomUUID(); return result(id, { sessionId, configOptions: config() }); }
   if (method === 'session/load') { servers = params.mcpServers; sessionId = params.sessionId; return result(id, { configOptions: config() }); }
   if (method === 'session/set_config_option') {
@@ -44,8 +44,8 @@ async function handle(message) {
   }
   if (method === 'session/prompt') {
     turns++;
-    const usageUpdate = () => process.env.ACP_TEST_USAGE && update({ sessionUpdate: 'usage_update', used: 1000,
-      size: model === 'fixture-other' ? 500000 : 1000000, cost: { amount: turns * 0.25, currency: 'USD' } });
+    const usageUpdate = () => (process.env.ACP_TEST_USAGE || process.env.ACP_TEST_CONTEXT) && update({ sessionUpdate: 'usage_update', used: 1000,
+      size: Number(process.env.ACP_TEST_CONTEXT) || (model === 'fixture-other' ? 500000 : 1000000), cost: { amount: turns * 0.25, currency: 'USD' } });
     usageUpdate();
     log({ effective: { sessionId, model, effort } });
     prompts.set(id, true);
