@@ -63,9 +63,8 @@ test('HTTP clients share the provider catalog, session output, and approval form
         assert.deepEqual((await second.session.get({ sessionID })).tokens,
           { input: 11, output: 4, reasoning: 3, cache: { read: 23, write: 5 } }, 'native token counters count a paused ACP turn exactly once');
         const updatedModels = (await second.model.list({ location })).data;
-        assert.equal(updatedModels.find((model) => model.providerID === 'claude-acp' && model.id === 'fixture-model').limit.context, 1000000);
-        assert.equal(updatedModels.find((model) => model.providerID === 'claude-acp' && model.id === 'fixture-other').limit.context, 200000,
-          'a context window is only assigned to the model used in that turn');
+        assert(updatedModels.filter((model) => model.providerID === 'claude-acp').every((model) => model.limit.context === 0),
+          'native usage updates never enable automatic host checkpoints for ACP models');
         await second.session.command({ sessionID, name: 'claude-usage', text: '' });
         await second.session.wait({ sessionID });
         const reported = await second.session.context({ sessionID });

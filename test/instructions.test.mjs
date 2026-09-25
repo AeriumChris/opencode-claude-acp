@@ -22,7 +22,7 @@ test('AGENTS.md reads deliver scoped guidance without forwarding host agent prom
   const host = await OpenCode.create({ database: { path: ':memory:' }, models: { fetch: false },
     config: { directory: config, content: JSON.stringify({ agents: { reviewer: { system: 'CUSTOM_AGENT_TOKEN' } } }) },
     fs: { filewatcher: false, fff: false },
-    plugins: [createPlugin({ command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log } }),
+    plugins: [createPlugin({ command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' } }),
       Plugin.define({ id: 'test.instructions', async setup(ctx) {
          await ctx.session.hook('context', (event) => { event.system.push({ type: 'text', text: 'LATE_PLUGIN_INSTRUCTION' }); });
       } })],
@@ -39,6 +39,11 @@ test('AGENTS.md reads deliver scoped guidance without forwarding host agent prom
   await prompt('hello');
   const initial = (await logs()).find((entry) => entry.method === 'session/new' && entry.params.mcpServers.length);
   assert.match(initial.params._meta.systemPrompt.append, /read the repository AGENTS.md/);
+  assert.match(initial.params._meta.systemPrompt.append, /foreground shell calls/);
+  assert.match(initial.params._meta.systemPrompt.append, /verify its published status before ending the turn/);
+  const environments = (await logs()).filter((entry) => Object.hasOwn(entry, 'backgroundTasksDisabled'));
+  assert(environments.length > 0);
+  assert(environments.every((entry) => entry.backgroundTasksDisabled === '1'), 'native background work stays disabled even with a conflicting env option');
   for (const token of ['CUSTOM_AGENT_TOKEN', 'ROOT_RULE_TOKEN', 'GLOBAL_RULE_TOKEN', 'LATE_PLUGIN_INSTRUCTION']) {
     assert(!initial.params._meta.systemPrompt.append.includes(token), `host system content ${token} is not forwarded`);
   }

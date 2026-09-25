@@ -28,7 +28,10 @@ async function handle(message) {
   const { id, method, params = {} } = message;
   if (!method) { pending.get(id)?.(message.result); pending.delete(id); return; }
   log({ method, params });
-  if (method === 'initialize') return result(id, { protocolVersion: 1, agentCapabilities: { loadSession: process.env.ACP_TEST_NO_LOAD !== '1', promptCapabilities: { image: true }, mcpCapabilities: { http: true } } });
+  if (method === 'initialize') {
+    log({ backgroundTasksDisabled: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS });
+    return result(id, { protocolVersion: 1, agentCapabilities: { loadSession: process.env.ACP_TEST_NO_LOAD !== '1', promptCapabilities: { image: true }, mcpCapabilities: { http: true } } });
+  }
   if (method === 'session/new') { servers = params.mcpServers; sessionId = randomUUID(); return result(id, { sessionId, configOptions: config() }); }
   if (method === 'session/load') { servers = params.mcpServers; sessionId = params.sessionId; return result(id, { configOptions: config() }); }
   if (method === 'session/set_config_option') {
@@ -83,7 +86,7 @@ async function handle(message) {
         update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' }); // Duplicate notification.
       }
       update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Activity finished.' } });
-    } else if (text.startsWith('relay:')) {
+    } else if (text.startsWith('relay:') || text === 'ci-workflow') {
       const toolCallId = randomUUID();
       update({ sessionUpdate: 'tool_call', toolCallId, title: 'Call OpenCode tools', status: 'in_progress' });
       const server = servers.find((item) => item.name === 'opencode');
@@ -93,8 +96,24 @@ async function handle(message) {
       }));
       try {
         log({ relayTools: (await mcp.listTools()).tools.map((tool) => tool.name) });
-        const calls = JSON.parse(text.slice(6));
-        const outputs = await Promise.all((Array.isArray(calls) ? calls : [calls]).map((call) => mcp.callTool(call)));
+        let outputs;
+        if (text === 'ci-workflow') {
+          outputs = [];
+          const call = async (name) => {
+            const output = await mcp.callTool({ name, arguments: {} });
+            outputs.push(output);
+            return output.content.filter((part) => part.type === 'text').map((part) => part.text).join('');
+          };
+          let status;
+          do { status = await call('ci_status'); } while (status === 'running');
+          if (status === 'success') {
+            await call('ci_publish');
+            await call('ci_release');
+          }
+        } else {
+          const calls = JSON.parse(text.slice(6));
+          outputs = await Promise.all((Array.isArray(calls) ? calls : [calls]).map((call) => mcp.callTool(call)));
+        }
         log({ relayResults: outputs });
         update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', rawOutput: 'OpenCode tools returned' });
         update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(outputs) } });

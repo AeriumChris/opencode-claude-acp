@@ -26,6 +26,7 @@ test('checkpoint restoration rejects missing or circular archives instead of los
   const checkpoints = new Checkpoints({ get: async (key) => values.get(key), set: async (key, value) => { values.set(key, value); } });
   const user = { type: 'user', id: 'msg_original', time: { created: 1 }, text: 'Keep the original request.' };
   const result = await checkpoints.create(checkpoints.history([user]));
+  assert.equal(result.summary, '', 'checkpoints do not add explanatory text to the transcript');
   const raw = { type: 'compaction', id: 'msg_checkpoint', time: { created: 2 }, status: 'completed', reason: 'auto', recent: '', ...result };
   const history = checkpoints.history([raw]);
   assert.equal((await checkpoints.expand(history))[0].text, user.text);
@@ -79,6 +80,11 @@ test('real host checkpoints preserve pending prompts, attachments, restart conti
       fs: { filewatcher: false, fff: false }, plugins: [createPlugin({ command: process.execPath,
         args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log, ...(auto ? { ACP_TEST_CONTEXT: '1000' } : {}), ...(noLoad ? { ACP_TEST_NO_LOAD: '1' } : {}) } }),
         Plugin.define({ id: 'test.checkpoint-observer', async setup(ctx) {
+          // ACP opts out by default. Explicitly force a host limit here to keep
+          // exercising recovery of old checkpoints and overridden host policy.
+          if (auto) await ctx.model.transform((editor) => {
+            for (const model of editor.list('claude-acp')) editor.update(model.providerID, model.id, (draft) => { draft.limit.context = 1000; });
+          });
           await ctx.session.hook('compaction', (event) => {
             compactions.push({ sessionID: event.sessionID, supplied: !!event.result });
             if (simulateOldFailure) { simulateOldFailure = false; throw new Error('Simulated old plugin compaction failure'); }
@@ -112,6 +118,7 @@ test('real host checkpoints preserve pending prompts, attachments, restart conti
     const context = await wait(sessionID);
     const checkpoint = context.find((m) => m.type === 'compaction');
     assert.equal(checkpoint?.status, 'completed', JSON.stringify(context));
+    assert.equal(checkpoint.summary, '', 'manual checkpoints have no notice body');
     assert(checkpoint.metadata.claudeAcpCheckpoint.startsWith('checkpoint/'));
     assert.equal((await prompts()).length, count, 'checkpoint does not prompt Claude');
     return checkpoint;
@@ -147,7 +154,7 @@ test('real host checkpoints preserve pending prompts, attachments, restart conti
   await say(fork.id, 'Continue with another provider.');
   const switched = (await logs()).filter((e) => e.otherProvider).at(-1).otherProvider;
   assert.match(JSON.stringify(switched), /Original attachment contents|Second original message/);
-  assert.doesNotMatch(JSON.stringify(switched), /Claude ACP checkpoint\./);
+  assert.doesNotMatch(JSON.stringify(switched), /Checkpoint saved\./);
   await host.sessions.compact({ sessionID: fork.id });
   await wait(fork.id);
   const summarized = (await logs()).filter((e) => e.otherProvider).at(-1).otherProvider;

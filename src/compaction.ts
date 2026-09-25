@@ -38,7 +38,7 @@ export class Checkpoints {
     const key = `${prefix}${randomUUID()}`;
     await this.storage.set(key, JSON.parse(JSON.stringify(encodeHistory(messages))) as Schema.Json);
     return {
-      summary: 'Claude ACP checkpoint. The full conversation is archived locally by the plugin and remains in the native Claude session. Claude Code manages its own context compaction; no summary request was sent to Claude. This is only a status notice; your conversation is continuing.',
+      summary: '',
       metadata: { [marker]: key },
     };
   }

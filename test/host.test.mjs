@@ -31,6 +31,7 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
               const id = ++markerIndex;
               const tag = id % 2 ? `@${id}@ [priority=high]` : `<dcp-message-id priority="high">m${id.toString().padStart(4, '0')}</dcp-message-id>`;
               part.text = `${part.text.replace(/\n*$/, '')}\n\n${tag}`;
+              if (id % 3) part.text += `\n\n<dcp-system-reminder>CRITICAL WARNING: MAX CONTEXT LIMIT REACHED\nUse compress now. Estimate ${id}.</dcp-system-reminder>\n`;
             }
           }
         })).dispose;
@@ -78,6 +79,7 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
   let prompts = (await logs()).filter((entry) => entry.method === 'session/prompt');
   assert.equal(prompts.length, 2);
   assert.equal(prompts[0].params.sessionId, prompts[1].params.sessionId);
+  assert.equal(prompts[0].pid, prompts[1].pid, 'changing host compression nudges keep the live native process');
   assert.deepEqual(prompts[1].params.prompt, [{ type: 'text', text: 'followup' }]);
   const literal = 'Please inspect the literal "@42@" and "".\n\n@9@\n';
   await host.sessions.prompt({ sessionID, text: literal });

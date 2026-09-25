@@ -44,10 +44,10 @@ This plugin connects OpenCode to the Claude Code CLI through the [Agent Client P
 | **Existing MCP connections** | Claude can use available OpenCode MCP tools, including Code Mode discovery/execution. Upstream authentication stays in OpenCode. |
 | **Approvals and questions** | Compact ACP approval forms offer one-time approval, adapter-provided persistent choices, and **Allow all (session)**. Set `permissionMode: "allow"` for automatic ACP approval across sessions. Relayed tools retain OpenCode's own permissions and forms. |
 | **Conversation continuity** | Follow-ups reuse the native Claude session. Saved sessions reload after idle shutdown; history bootstrap preserves prior text and images. |
-| **DCP marker compatibility** | Generated message-ID suffixes are removed without removing literal markers, quotes, or whitespace from your original messages. |
+| **DCP compatibility** | Verified host-added message-ID suffixes and compression nudges are removed without changing your original text. |
 | **Cancellation** | Stop interrupts the active ACP turn and relayed work. Automatic model retries are disabled to avoid replaying agent actions. |
 | **Usage reporting** | Reported input, output, and cache tokens populate OpenCode's native counters. `/claude-usage` shows completed-turn totals, context occupancy/capacity, and the latest ACP cost reading without calling Claude. |
-| **Context capacity** | The selected model's context limit updates when ACP reports it. Other models retain their own observed limits or the OpenCode fallback. |
+| **Context capacity** | `/claude-usage` shows ACP's reported native capacity. Automatic OpenCode context-limit checkpoints are disabled for ACP models; Claude manages its own context. |
 
 Tool compatibility does not mean every OpenCode feature controls Claude's internal agent loop. See [plugin compatibility](#plugin-and-mcp-compatibility) and [current limitations](#current-limitations), especially for DCP, agent instructions, and plan mode.
 
@@ -363,7 +363,7 @@ Claude is instructed to prefer these tools for operations they support. A call p
 | Skill and delegation tools | Callable when present in the session catalog. Returned content reaches Claude; this does not mirror OpenCode's agent system prompts. |
 | UI and event plugins | Continue running in OpenCode; this bridge does not reproduce their UI inside Claude CLI. |
 | RTK-style command rewriting | Applies when the installed integration hooks a **relayed OpenCode shell tool**. Claude's native Bash calls bypass those hooks. |
-| DCP | Partial compatibility: generated message-ID suffixes are cleaned up and renumbering does not reset the native conversation. Pruning OpenCode's history does not prune Claude's separate native history. |
+| DCP | Partial compatibility: generated message-ID suffixes and host compression nudges are cleaned up without resetting the native conversation. Pruning OpenCode's history does not prune Claude's separate native history. |
 | Anthropic HTTP/body rewriting plugins | Do not intercept the model traffic made inside Claude CLI. |
 | System-prompt, plan-mode, or compaction plugins | Do not automatically control Claude's native agent loop. |
 
@@ -426,15 +426,27 @@ Use **Stop** to interrupt a turn. Cancellation closes pending relay work and int
 - Titles are derived from user text without an extra Claude generation call.
 - Generated DCP suffixes are distinguished from literal text using OpenCode's persisted original messages. Your own markers, quotes, and whitespace are preserved.
 
+### CI monitoring and background tasks
+
+Keep CI monitoring and its dependent actions in the **active turn**. The bridge adds guidance to use bounded foreground status checks and pauses, handle build failures, then publish and verify the requested release before finishing. A successful build is only one step of that workflow.
+
+Claude's native background tasks are disabled in the adapter subprocess with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` (including when an inherited environment or `options.env` says otherwise). Native callbacks arriving after `session/prompt` returns do not have an OpenCode tool loop to receive them. Detached shell processes also cannot be relied on to resume the conversation. For dependent work, use relayed foreground shell calls with `background: false`.
+
+This is a foreground workflow, not a background wake-up implementation. The bridge normally reuses the live process across prompts; it does **not** spawn a new Claude process for every message. Idle eviction, cancellation, and catalog changes can reconnect it. An active foreground tool wait is not subject to idle eviction. Stop or a service shutdown can still interrupt monitoring.
+
 ### Context compaction
 
-Automatic and manual OpenCode compaction complete as **local checkpoints**. The plugin archives the active host history in OpenCode plugin storage, then returns a completed checkpoint to OpenCode. It does not send Claude a summarization prompt, charge a separate model call, or reset the native conversation. Claude Code continues managing its own native context and compaction.
+Automatic OpenCode context-limit compaction is disabled for ACP models. OpenCode estimates context from assistant token counters, but ACP reports totals across a native agent turn, which can include many model calls. Those totals can repeatedly trigger unnecessary host checkpoints. Claude Code continues managing its own native context and compaction.
+
+Manually requested compaction still creates a **local checkpoint**: the plugin archives the active host history in OpenCode plugin storage without prompting Claude or resetting its native conversation. These checkpoints have no explanatory message body; OpenCode may still display its compaction dividers for an explicit request. Existing transcript entries retain their original text.
 
 The bridge restores the original messages behind a checkpoint when preparing a turn. This preserves the message cursor, attachments, and pending approval/tool results: a user message admitted immediately before automatic compaction still reaches Claude once. Follow-ups and service restarts continue the saved native session. Forks, reverts, and adapters without session-loading support can bootstrap from the archived history as historical context. Switching to another provider restores that history for its requests and normal summarization.
 
 For Claude ACP, restoration happens inside the provider after host request validation. This preserves screenshots across the separate runtimes used by a bundled OpenCode executable and a filesystem plugin, including when DCP rewrites message objects. Other providers need the host's message schema to restore attachments: if an earlier context plugin replaces every host message with a plain object, disable that context transformation before switching providers. The plugin reports this explicitly and retains the archive.
 
 Checkpoint archives are local and location-scoped, and remain in plugin storage so forks and reverted histories can still reference them. Back up or migrate that storage along with the OpenCode session data. A transcript export or a move to a different location does not by itself carry these archives. Keep the plugin available for sessions that depend on its checkpoints; missing archives produce an explicit error rather than silently dropping earlier context. Checkpoints do not reduce Claude's reported native token usage or increase its context capacity.
+
+DCP's host-context estimate can count tokens across an entire ACP agent turn, rather than the latest native context snapshot. Its appended compression warnings are therefore not authoritative for Claude's context capacity. The bridge removes verified host-added DCP reminder suffixes as well as IDs before comparing history and preparing native prompts. This prevents changing warnings from resetting the session; user-authored warnings and unrelated plugin text are preserved. Use `/claude-usage` for the last reported native context reading.
 
 For a session left showing **Compacting** by an older plugin version, [update the configured checkout and restart the matching service](#update), then retry in that session. Old failed/running entries may remain in its history; the new compaction attempt uses the preserved conversation.
 
@@ -467,9 +479,9 @@ OpenCode 2.0.15 calculates its standard dollar counter from model price tables a
 
 ### Model limits
 
-ACP `usage_update.size` updates the **selected model's context limit** in the shared provider catalog. This becomes available after an ordinary turn reports usage, rather than during initial model discovery. The adapter may initially estimate the window and later refine it; the report identifies the value as ACP-supplied, not independently measured.
+ACP `usage_update.size` supplies the native capacity shown by `/claude-usage`. The adapter may initially estimate the window and later refine it; the report identifies the value as ACP-supplied, not independently measured. Stored usage reports retain their last readings across plugin restarts.
 
-Until a model reports its capacity, the catalog retains OpenCode's default context limit. The pinned adapter does **not** expose an output-token limit in these reports, so that limit remains OpenCode's fallback. Learning one model's limit does not assign it to every Claude model. Catalog observations are relearned after a plugin restart; stored usage reports retain their last readings.
+The shared catalog advertises `limit.context: 0` for ACP models. This is OpenCode's opt-out from automatic context-limit compaction, not a claim that Claude has zero or unlimited capacity. Native usage updates do not overwrite it. Use `/claude-usage` instead of the host context meter for native occupancy/capacity. The pinned adapter does **not** expose an output-token limit in these reports, so that limit remains OpenCode's fallback. Other providers retain their normal automatic compaction policy.
 
 ## Authentication and billing
 
@@ -490,7 +502,7 @@ All options are optional and belong inside the configured plugin entry's `option
 | `nodeExecutable` | `node` | Node executable that launches the bundled adapter. An absolute path is useful for GUI/background services with a different `PATH`. |
 | `command` | Bundled adapter launched through Node | Override the **ACP executable**, not the Claude executable. No shell expansion is performed. |
 | `args` | `[]` with a custom command | Argument array. Requires an explicit `command`. |
-| `env` | Inherited server environment | Additional/overridden subprocess environment variables. |
+| `env` | Inherited server environment | Additional/overridden subprocess environment variables. Native background tasks are always disabled; see [CI monitoring](#ci-monitoring-and-background-tasks). |
 | `startupTimeoutMs` | `30000` | Initialization and session creation/load deadline, in milliseconds. |
 | `idleTimeoutMs` | `300000` | Close completed inactive connections after this many milliseconds. |
 | `permissionMode` | `"ask"` | `"allow"` automatically approves ACP permission requests; OpenCode tool permissions still apply. |
@@ -574,8 +586,11 @@ Remove only this plugin's entry from the relevant `plugins` array, then restart 
 | Still prompted after enabling automatic ACP approval | Check whether the prompt is an OpenCode tool permission or an ordinary question. These have separate behavior from ACP approvals. |
 | Plan agent still permits native edits | OpenCode plan mode is not mapped to Claude. Its host permissions do not govern Claude-native tools. |
 | Stuck showing Compacting after a failed turn | Older versions threw during host compaction. Update/rebuild the configured plugin checkout, restart the matching service, and retry. Current versions complete local checkpoints; see [Context compaction](#context-compaction). |
+| CI succeeds but promised follow-up never happens | Use the foreground monitoring path in [CI monitoring and background tasks](#ci-monitoring-and-background-tasks). Native background callbacks cannot resume an ended OpenCode turn. Update/rebuild the configured checkout for the foreground guard and guidance. |
+| DCP says max context was reached unexpectedly | Compare `/claude-usage` with the warning: host turn totals and native context usage are different. Update for verified DCP-reminder cleanup; see [Context compaction](#context-compaction). |
 | Chat stops immediately after “Session compacted,” especially with screenshots | An earlier checkpoint implementation restored plugin-local image objects into the bundled host, which rejected them during request validation. Update/rebuild the configured checkout, restart the matching service, and continue in the same session. Existing checkpoint archives remain compatible. |
 | Checkpoint history is unavailable | Restore the plugin storage for the session's original location. Checkpoints refer to locally archived history; copying only the transcript does not copy that archive. |
+| Repeated “Claude ACP checkpoint” notices | Rebuild the configured plugin checkout and restart the matching service. ACP models now opt out of automatic host context-limit checkpoints. Existing notices remain in historical messages. |
 | An attachment is missing | Use supported image/text formats. Upload local files for a remote server; a server cannot resolve a path on your laptop. |
 | Extra-usage error | See [Authentication and billing](#authentication-and-billing). There is no plugin switch that forces plan-only billing. |
 
@@ -598,6 +613,7 @@ Run them from the affected project; catalog/configuration is location-scoped. Fo
 - **Host checkpoints depend on local plugin storage.** They preserve continuity without invoking native Claude compaction. Auxiliary generation remains unsupported. See [Context compaction](#context-compaction).
 - **Usage depends on ACP reporting.** Missing/interrupted-turn totals and historical usage cannot be reconstructed. ACP cost is shown by `/claude-usage`, separately from OpenCode's price-table dollar counter. Context capacity updates when reported; output-token limits remain OpenCode defaults. See [Usage, cost, and token limits](#usage-cost-and-token-limits).
 - **Not every plugin applies.** Host HTTP/system/compaction hooks do not control Claude's internal requests/history. Native Claude tools bypass host tool hooks.
+- **Native background callbacks do not wake OpenCode.** Native background tasks are disabled; dependent CI/release work should remain in foreground calls until verified.
 - Native mode selectors, slash-command discovery, and native edit-review UI are not implemented.
 - Unsupported binary documents and direct remote media references are not converted into model-readable content.
 - The implementation targets the pinned Claude adapter's configuration-options API, not every ACP agent or arbitrary OpenCode version.
@@ -650,13 +666,15 @@ The tests use a protocol fixture through the **real OpenCode host and HTTP serve
 | --- | --- |
 | [`test/activity.test.mjs`](test/activity.test.mjs) | Pending and concurrent running tools observed before fixture completion, refined titles/inputs, sparse and duplicate results, approval handoffs, cancellation, and missing terminal status. |
 | [`test/compaction.test.mjs`](test/compaction.test.mjs) | Manual/automatic checkpoints, exactly-once pending prompts, real service-host reopen, attachments, forks/reverts, provider switching and summarization, approval/relay continuations, adapters without native loading, missing/circular archives, and separate image-class identities. |
-| [`test/bundled.test.mjs`](test/bundled.test.mjs) | Opt-in release-executable integration: image checkpoints, restart/fork recovery, automatic compaction during tool handoff, and DCP-style plain-object context edits. Uses an isolated server and fixture ACP process. |
+| [`test/bundled.test.mjs`](test/bundled.test.mjs) | Opt-in release-executable integration: silent-body image checkpoints, restart/fork recovery, no automatic checkpoint during tool handoff, and DCP-style plain-object context edits. Uses an isolated server and fixture ACP process. |
 | [`test/host.test.mjs`](test/host.test.mjs) | Model discovery/visibility metadata, model-specific effort, switching/default reset, streaming, continuity, approval/denial/dismissal, cancellation, native reload/isolation, and DCP marker handling. |
 | [`test/permissions.test.mjs`](test/permissions.test.mjs) | Bounded approval summaries, omitted file bodies, adapter-specific persistent choice IDs, rejection of unoffered choices, queued/session-wide approvals, reconnect persistence, session isolation, and automatic approval configuration. |
-| [`test/http.test.mjs`](test/http.test.mjs) | Loading the configured local plugin directory; shared model/session/approval APIs across two clients; image/text attachment transport and history; native token accounting across approvals, learned context limits, and local usage reports without Claude requests. |
+| [`test/http.test.mjs`](test/http.test.mjs) | Loading the configured local plugin directory; shared model/session/approval APIs across two clients; image/text attachment transport and history; native token accounting across approvals, the host compaction opt-out, and local usage reports without Claude requests. |
 | [`test/usage.test.mjs`](test/usage.test.mjs) | Cache/input mapping, unknown and zero values, repeated cumulative cost readings, persisted totals across reconnects, model changes, and session isolation. |
 | [`test/tools.test.mjs`](test/tools.test.mjs) | Before/after hooks, parallel calls, upstream MCP, Code Mode, errors, hidden tools, native host permission denial, forms, cancellation, image results, catalog refresh, and relay authentication/isolation. |
 | [`test/instructions.test.mjs`](test/instructions.test.mjs) | Root/nested `AGENTS.md` reads and same-turn scoped guidance, follow-up continuity, and exclusion of unrelated host system instructions. |
+| [`test/workflow.test.mjs`](test/workflow.test.mjs) | Gated foreground CI wait across idle-timeout duration, publish/verification handoffs in one ACP prompt, failure handling, and changing DCP warnings. Fixture-driven; does not establish real-model instruction adherence or publish a GitHub release. |
+| [`test/prompt.test.mjs`](test/prompt.test.mjs) | Verified DCP-reminder/ID cleanup, preservation of user-authored warnings and unrelated guidance, and missing-source handling. |
 
 The repository includes a [GitHub Actions workflow](.github/workflows/ci.yml) for Windows and Ubuntu with Node.js 24.
 

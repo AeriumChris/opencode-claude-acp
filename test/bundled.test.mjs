@@ -91,14 +91,14 @@ test('bundled host continues image checkpoints and reloads their archived histor
   await say(sessionID, 'Second message.');
   await client.session.compact({ sessionID });
   await client.session.wait({ sessionID });
-  assert((await client.session.context({ sessionID })).some((m) => m.type === 'compaction' && m.status === 'completed'));
+  assert((await client.session.context({ sessionID })).some((m) => m.type === 'compaction' && m.status === 'completed' && m.summary === ''));
   await say(sessionID, 'Continue after checkpoint.');
   assert.deepEqual((await prompts()).at(-1).params, { sessionId: nativeID, prompt: [{ type: 'text', text: 'Continue after checkpoint.' }] });
   await stop();
   client = await start(true);
   await say(sessionID, 'Continue after restart.');
   assert.deepEqual((await prompts()).at(-1).params, { sessionId: nativeID, prompt: [{ type: 'text', text: 'Continue after restart.' }] });
-  await eventually(async () => (await client.model.list({ location: { directory } })).data.find((m) => m.providerID === 'claude-acp' && m.id === 'fixture-model')?.limit.context === 1000, 'small context published');
+  assert.equal((await client.model.list({ location: { directory } })).data.find((m) => m.providerID === 'claude-acp' && m.id === 'fixture-model')?.limit.context, 0, 'native capacity does not enable host compaction');
   const question = { name: 'question', arguments: { questions: [{ header: 'Checkpoint test', question: 'Choose a value', options: [{ label: 'Blue', description: 'Blue' }] }] } };
   await client.session.prompt({ sessionID, text: `relay:${JSON.stringify(question)}` });
   const form = await eventually(async () => (await client.session.form.list({ sessionID }))[0], 'relayed question');
@@ -108,7 +108,7 @@ test('bundled host continues image checkpoints and reloads their archived histor
   await client.session.wait({ sessionID }, { signal: AbortSignal.timeout(30_000) });
   assert.notEqual((await client.session.get({ sessionID })).outcome, 'failed');
   const checkpoint = (await client.session.context({ sessionID })).find((m) => m.type === 'compaction');
-  assert.notEqual(checkpoint?.id, checkpointID, 'automatic compaction ran during the tool handoff');
+  assert.equal(checkpoint?.id, checkpointID, 'no automatic checkpoint banner appears during the tool handoff');
   assert.equal(checkpoint?.status, 'completed');
   assert.equal((await prompts()).length, beforeRelay, 'tool result resumes the same native prompt');
   assert.match(JSON.stringify((await logs()).filter((e) => e.relayResults).at(-1)), /Blue/);

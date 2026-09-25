@@ -5,7 +5,7 @@ import { client, ndJsonStream, PROTOCOL_VERSION, type ClientConnection, type Req
 import { command, type Options } from './options.js';
 
 export interface Choice { id: string; name: string }
-export interface ModelChoice extends Choice { efforts?: Choice[]; contextWindow?: number }
+export interface ModelChoice extends Choice { efforts?: Choice[] }
 export function effortChoices(config: SessionConfigOption[]): Choice[] {
   const option = config.find((item) => item.category === 'thought_level' && item.type === 'select');
   if (!option || option.type !== 'select') return [];
@@ -36,7 +36,9 @@ export class AcpConnection {
     close(error: Error): void;
   }) {
     const [exe, args] = command(options);
-    this.child = spawn(exe, args, { cwd: directory, env: { ...process.env, ...options.env },
+    // Native background completions can arrive after session/prompt returns,
+    // outside OpenCode's tool loop. Keep Claude's tasks in the live ACP turn.
+    this.child = spawn(exe, args, { cwd: directory, env: { ...process.env, ...options.env, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
       stdio: 'pipe', shell: false, windowsHide: true });
     // Drain stderr, but never echo prompts, credentials, or source code into host logs.
     this.child.stderr.resume();
@@ -67,6 +69,8 @@ export class AcpConnection {
       'Prefer these tools for supported operations so OpenCode tool hooks and permissions apply. Native Claude tools remain available.',
       'For the opencode execute tool, use search({query, namespace}) inside its code to discover exact tool paths and signatures; search is synchronous.',
       'Only call paths returned by search, and await tool calls. Do not guess tool paths.',
+      'Keep dependent work in the active turn. Native background-task callbacks are not delivered after the ACP turn ends. Use foreground shell calls (background: false); do not detach CI watchers or promise to resume from a native background notification.',
+      'When asked to monitor a build and then publish a release, poll its status with bounded foreground calls and pauses until it finishes, handle failures, then complete the requested release and verify its published status before ending the turn. A successful build alone does not complete a release task.',
       'Before repository work, read the repository AGENTS.md if present. Before working in a subdirectory, also check for applicable AGENTS.md files along its path. Use the opencode read tool so it can return additional directory instructions.',
       'Follow AGENTS.md guidance within its directory scope; more specific directory guidance takes precedence. Re-read relevant guidance when asked or when it changes.',
     ].join('\n') } } } : {};

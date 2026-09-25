@@ -301,11 +301,7 @@ export class Bridge {
         }
         const update = packet.update;
         if (update.sessionUpdate === 'usage_update') {
-          const contextWindow = await this.usage.update(sessionID, turn.report, update);
-          if (contextWindow) {
-            const choice = modelChoices(entry.acp.config).find((choice) => choice.id === turn.report.model);
-            this.inventory([{ id: turn.report.model, name: choice?.name ?? 'Claude Code — default (ACP)', contextWindow }]);
-          }
+          await this.usage.update(sessionID, turn.report, update);
         } else if ((update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'agent_thought_chunk') && update.content.type === 'text') {
           const kind = update.sessionUpdate === 'agent_message_chunk' ? 'text' : 'reasoning';
           if (block?.kind !== kind) {

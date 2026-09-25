@@ -41,7 +41,10 @@ export function createPlugin(options: Options = {}) {
         package: new URL('./provider.js', import.meta.url).href, settings: { instanceID } },
         models: models.map((item) => ({ ...Model.Info.default(providerID, Model.ID.make(item.id)), name: item.name,
           family: Model.Family.make(`claude-acp/${item.id}`), time: { released: catalogRegisteredAt },
-          ...(item.contextWindow ? { limit: { ...Model.Info.default(providerID, Model.ID.make(item.id)).limit, context: item.contextWindow } } : {}),
+          // Zero disables OpenCode's automatic context-limit checkpoints. ACP
+          // owns its native context; turn-wide billing totals cannot size it.
+          // Keep the actual native capacity in /claude-usage instead.
+          limit: { ...Model.Info.default(providerID, Model.ID.make(item.id)).limit, context: 0 },
           variants: (item.efforts ?? []).filter((effort) => effort.id !== 'default')
             .map((effort) => ({ id: Model.VariantID.make(effort.id) })),
           capabilities: { tools: true, input: ['text', 'image'], output: ['text'] } })),
