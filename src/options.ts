@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { newestClaudeCli } from './claude-cli.js';
 
 export interface Options {
   /** Executable and argv, without shell expansion. Defaults to the bundled Zed adapter. */
@@ -29,8 +30,9 @@ export function parseOptions(input: Record<string, unknown>): Options {
   return input as Options;
 }
 
-export function command(options: Options): [string, string[]] {
-  if (options.command) return [options.command, options.args ?? []];
+export function command(options: Options): [string, string[], Record<string, string>] {
+  if (options.command) return [options.command, options.args ?? [], {}];
   const adapter = createRequire(import.meta.url).resolve('@agentclientprotocol/claude-agent-acp/dist/index.js');
-  return [options.nodeExecutable ?? 'node', [adapter]];
+  const cli = process.env.CLAUDE_CODE_EXECUTABLE === undefined ? newestClaudeCli(adapter) : undefined;
+  return [options.nodeExecutable ?? 'node', [adapter], cli ? { CLAUDE_CODE_EXECUTABLE: cli } : {}];
 }

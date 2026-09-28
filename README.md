@@ -265,6 +265,19 @@ These `run` commands send actual Claude requests. Use an interactive client for 
 
 If the provider is hidden, refresh the client and check **Manage models**. Explicit hidden-model preferences take precedence over the plugin's defaults.
 
+### Newest models
+
+The default adapter uses the newest installed Claude Code version when it is strictly newer than the SDK's bundled copy. The plugin checks versioned installs under:
+
+- Native installer: `~/.local/share/claude/versions/<version>`.
+- Windows desktop: `%APPDATA%\Claude\claude-code\<version>\claude.exe`, including Store installs at `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code\<version>\claude.exe`.
+- macOS desktop: `~/Library/Application Support/Claude/claude-code/<version>`.
+- Linux desktop: `$XDG_CONFIG_HOME/Claude/claude-code/<version>`, or `~/.config/Claude/claude-code/<version>`.
+
+Only `x.y.z` entries with an existing executable are considered; incomplete downloads are skipped, and Windows requires `.exe`. If no newer install is found or the bundled version cannot be read, the adapter uses its bundled copy. Discovery reads files without running candidate binaries.
+
+After Claude updates, finish active work and [restart the OpenCode service](#update), then refresh the client to refresh the picker. The model list still comes from Claude Code. To pin a binary, set `CLAUDE_CODE_EXECUTABLE` in the server environment or [`options.env`](#configuration-options); `options.env` takes precedence. Custom ACP commands do not use automatic CLI discovery.
+
 ### Native tool activity
 
 Native tools appear as soon as ACP announces them, including while their inputs are being prepared. An ACP `in_progress` update changes the entry to running; completion or failure settles it. Titles and inputs are retained across sparse updates, so a final result does not replace a readable operation title with a `toolu_…` identifier.
@@ -485,7 +498,7 @@ The shared catalog advertises `limit.context: 0` for ACP models. This is OpenCod
 
 ## Authentication and billing
 
-Claude authentication is handled by the **Claude CLI running as the server user**. Signing into an Anthropic API provider in OpenCode is not the same thing. An existing CLI can be selected with `CLAUDE_CODE_EXECUTABLE`; otherwise the bundled CLI is used.
+Claude authentication is handled by the **Claude CLI running as the server user**. Signing into an Anthropic API provider in OpenCode is not the same thing. An existing CLI can be selected with `CLAUDE_CODE_EXECUTABLE`; otherwise the plugin selects a newer installed copy or falls back to the bundled CLI. See [Newest models](#newest-models).
 
 **This plugin does not select, measure, or guarantee a subscription-only billing pool.** Billing depends on Anthropic's current policy, the authenticated account, and Claude's configuration. Successful functional tests do not prove which allowance was charged. Review the current [Anthropic plan/SDK guidance](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) and your account's usage settings.
 
@@ -664,6 +677,7 @@ The tests use a protocol fixture through the **real OpenCode host and HTTP serve
 
 | Test | Coverage |
 | --- | --- |
+| [`test/claude-cli.test.mjs`](test/claude-cli.test.mjs) | Versioned native/desktop/Store CLI discovery, incomplete installs, Windows executable filtering, bundled-version fallback, and command overrides. |
 | [`test/activity.test.mjs`](test/activity.test.mjs) | Pending and concurrent running tools observed before fixture completion, refined titles/inputs, sparse and duplicate results, approval handoffs, cancellation, and missing terminal status. |
 | [`test/compaction.test.mjs`](test/compaction.test.mjs) | Manual/automatic checkpoints, exactly-once pending prompts, real service-host reopen, attachments, forks/reverts, provider switching and summarization, approval/relay continuations, adapters without native loading, missing/circular archives, and separate image-class identities. |
 | [`test/bundled.test.mjs`](test/bundled.test.mjs) | Opt-in release-executable integration: silent-body image checkpoints, restart/fork recovery, no automatic checkpoint during tool handoff, and DCP-style plain-object context edits. Uses an isolated server and fixture ACP process. |
@@ -710,6 +724,7 @@ These checks have passed locally with the bundled adapter/CLI. They use temporar
 | [`src/index.ts`](src/index.ts) | Provider registration, model/effort metadata, and OpenCode hooks. |
 | [`src/provider.ts`](src/provider.ts) | Native model transport and stream cancellation. |
 | [`src/acp.ts`](src/acp.ts) | Subprocess lifecycle, protocol connection, and session/model/effort negotiation. |
+| [`src/claude-cli.ts`](src/claude-cli.ts) | Synchronous installed CLI discovery and comparison with the adapter's bundled Claude Code version. |
 | [`src/bridge.ts`](src/bridge.ts) | History tracking, event translation, tool/approval continuation, and scoped guidance. |
 | [`src/compaction.ts`](src/compaction.ts) | Persistent host checkpoints and restoration through the pinned OpenCode history converter. |
 | [`src/native-tools.ts`](src/native-tools.ts) | Native activity state, partial ACP updates, and display continuity across host steps. |

@@ -35,10 +35,10 @@ export class AcpConnection {
     permission(request: RequestPermissionRequest): Promise<RequestPermissionResponse>;
     close(error: Error): void;
   }) {
-    const [exe, args] = command(options);
+    const [exe, args, extraEnv] = command(options);
     // Native background completions can arrive after session/prompt returns,
     // outside OpenCode's tool loop. Keep Claude's tasks in the live ACP turn.
-    this.child = spawn(exe, args, { cwd: directory, env: { ...process.env, ...options.env, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
+    this.child = spawn(exe, args, { cwd: directory, env: { ...process.env, ...extraEnv, ...options.env, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
       stdio: 'pipe', shell: false, windowsHide: true });
     // Drain stderr, but never echo prompts, credentials, or source code into host logs.
     this.child.stderr.resume();
