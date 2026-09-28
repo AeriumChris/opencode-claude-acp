@@ -4,7 +4,7 @@ Use **Claude Code from OpenCode's model picker**, with model-specific effort sel
 
 This plugin connects OpenCode to the Claude Code CLI through the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/). It uses the Claude adapter used by Zed and runs on the **OpenCode server**, making the same provider available to the TUI, desktop app, and web clients connected to that server.
 
-**Provider:** `claude-acp` · **Display name:** Claude Code (ACP) · **Default model:** `claude-acp/default`
+**Provider:** `claude-acp` · **Display name:** Claude Code (ACP) · **Example model:** `claude-acp/opus`
 
 **Compatibility:** built and tested with **OpenCode V2 2.0.15**, **Node.js 22+**, and the pinned Claude ACP adapter **0.81.1**. Live verification was performed on Windows with Node.js 24. This repository is private and installed from a local build; it is not published to npm.
 
@@ -177,7 +177,7 @@ opencode service status
 opencode models
 ```
 
-Run the model command from the project where you intend to use the plugin. Look for the `claude-acp` provider/model entries. Discovery is asynchronous: the default entry may appear before individual models and effort variants.
+Run the model command from the project where you intend to use the plugin. Look for the `claude-acp` provider/model entries. Discovery is asynchronous: named models and their effort variants may take a moment to appear.
 
 These checks do not send a chat prompt. For a remote server, perform the installation/restart on that server and reconnect your clients to it.
 
@@ -239,12 +239,12 @@ Inside the TUI, enter:
 /models
 ```
 
-Select **Claude Code (ACP)** and a discovered model. The `default` entry delegates model choice to Claude's default. Use the effort/variant control when the selected model offers variants.
+Select **Claude Code (ACP)** and a discovered model. The generic `default` entry is omitted from the picker; choose a named model such as **Opus 5.5** (`opus`) when advertised. Use the effort/variant control when the selected model offers variants.
 
 For a one-shot CLI request, from your project directory:
 
 ```sh
-opencode run --model claude-acp/default "Explain the structure of this repository"
+opencode run --model claude-acp/opus "Explain the structure of this repository"
 ```
 
 To use a discovered model and effort, append `#variant`. For example, **only if `opus` and `high` appear in your catalog**:
@@ -298,11 +298,11 @@ To activate this behavior after updating, rebuild the **configured plugin checko
 
 ### Optional default model
 
-To use this provider by default for new work, merge this field into the appropriate OpenCode config:
+To use Opus by default for new work, confirm `opus` appears in the catalog and merge this field into the appropriate OpenCode config:
 
 ```jsonc
 {
-  "model": "claude-acp/default"
+  "model": "claude-acp/opus"
 }
 ```
 
@@ -315,7 +315,7 @@ In desktop/web, use **Attach file**, paste a screenshot, or drag and drop files 
 For the CLI:
 
 ```sh
-opencode run --model claude-acp/default --file screenshot.png "Explain what is wrong in this screenshot"
+opencode run --model claude-acp/opus --file screenshot.png "Explain what is wrong in this screenshot"
 ```
 
 | Input | Handling |
@@ -578,7 +578,7 @@ Adjust the path if your bundled Node version or installation directory differs. 
 
 ### Remove
 
-Remove only this plugin's entry from the relevant `plugins` array, then restart the service. If you made `claude-acp/default` your configured default model, choose another provider. The checkout can then be removed if you no longer need it. Removing the plugin does not log out Claude or erase its native conversation history.
+Remove only this plugin's entry from the relevant `plugins` array, then restart the service. If you made a `claude-acp` model your configured default, choose another provider. The checkout can then be removed if you no longer need it. Removing the plugin does not log out Claude or erase its native conversation history.
 
 ## Troubleshooting
 
@@ -586,7 +586,7 @@ Remove only this plugin's entry from the relevant `plugins` array, then restart 
 | --- | --- |
 | Provider missing everywhere | Verify the plugin is in server-side `opencode.json(c)`, the directory URL is correct, the build exists, and the server restarted. Inspect `opencode api get /api/plugin` and `opencode models` from the affected project. |
 | Present in API/TUI, missing in desktop/web | Refresh the client, confirm it connects to the same server/project, and enable it in **Manage models** if explicitly hidden. |
-| Only the default model is shown | Give discovery time. Check bundled CLI sign-in and executable paths. Discovery failures leave the default entry; a submitted prompt will surface startup/auth errors. |
+| No Claude models are shown | Give discovery time. Check Claude CLI sign-in and executable paths. Discovery failures leave no named models; the generic default entry is not offered. |
 | No effort picker | The selected model may not advertise effort, or discovery is still running. Use only variants returned by the current catalog. |
 | Node/adapter fails to start | Use an absolute `nodeExecutable`, ensure Node 22+, and rerun `npm ci`/build. A terminal's `PATH` can differ from the background service's. |
 | Native tools only appear after finishing, or show `title=toolu_…` | Update and rebuild the checkout referenced by the configured plugin package, then restart the service after active work finishes. Existing history retains its old display entries. |

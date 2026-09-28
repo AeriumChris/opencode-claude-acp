@@ -52,12 +52,9 @@ export class Bridge {
     this.discoveries.add(acp);
     try {
       await acp.start();
-      const models = modelChoices(acp.config);
+      const models = modelChoices(acp.config).filter((model) => model.id !== 'default');
       // The thought_level option belongs to the currently selected model. Probe
       // choices in this disposable session, never in a user's active turn.
-      if (!models.some((model) => model.id === 'default')) {
-        models.unshift({ id: 'default', name: 'Claude Code — default (ACP)', efforts: effortChoices(acp.config) });
-      }
       if (!this.closed) this.inventory(models);
       for (const model of models) {
         if (this.closed) break;
