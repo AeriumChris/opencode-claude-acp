@@ -306,6 +306,8 @@ To use Opus by default for new work, confirm `opus` appears in the catalog and m
 }
 ```
 
+The same setting is available in [`opencode.example.json`](opencode.example.json). After installing the plugin, merge it into `~/.config/opencode/opencode.json(c)` for a global default, preserving your existing settings. The `opus` alias currently advertises Opus 5.5 and follows the installed Claude Code catalog.
+
 Existing session selections take precedence. OpenCode V2's root model default does not retain an effort variant; choose effort in the session or a `run --model ...#variant` command.
 
 ## Screenshots and file attachments
@@ -721,6 +723,7 @@ These checks have passed locally with the bundled adapter/CLI. They use temporar
 | File | Responsibility |
 | --- | --- |
 | [`server.js`](server.js) | Local-directory plugin loader entrypoint. |
+| [`opencode.example.json`](opencode.example.json) | Configuration example selecting Opus as the default model. |
 | [`src/index.ts`](src/index.ts) | Provider registration, model/effort metadata, and OpenCode hooks. |
 | [`src/provider.ts`](src/provider.ts) | Native model transport and stream cancellation. |
 | [`src/acp.ts`](src/acp.ts) | Subprocess lifecycle, protocol connection, and session/model/effort negotiation. |
