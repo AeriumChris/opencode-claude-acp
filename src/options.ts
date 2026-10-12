@@ -33,8 +33,6 @@ export function parseOptions(input: Record<string, unknown>): Options {
 export function command(options: Options): [string, string[], Record<string, string>] {
   if (options.command) return [options.command, options.args ?? [], {}];
   const adapter = createRequire(import.meta.url).resolve('@agentclientprotocol/claude-agent-acp/dist/index.js');
-  // Follow the newest installed Claude Code so new models appear without a
-  // plugin release. An explicit CLAUDE_CODE_EXECUTABLE (host or env option) wins.
-  const cli = process.env.CLAUDE_CODE_EXECUTABLE ? undefined : newestClaudeCli(adapter);
-  return [options.nodeExecutable ?? 'node', [adapter], cli ? { CLAUDE_CODE_EXECUTABLE: cli.path } : {}];
+  const cli = process.env.CLAUDE_CODE_EXECUTABLE === undefined ? newestClaudeCli(adapter) : undefined;
+  return [options.nodeExecutable ?? 'node', [adapter], cli ? { CLAUDE_CODE_EXECUTABLE: cli } : {}];
 }

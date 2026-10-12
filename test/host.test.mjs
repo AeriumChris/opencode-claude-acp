@@ -19,7 +19,7 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
   const log = join(directory, 'agent.jsonl');
   let markerIndex = 0;
   const host = await OpenCode.create({ database: { path: ':memory:' }, models: { fetch: false },
-    config: { directory, project: false, content: '{}' }, fs: { filewatcher: false, fff: false },
+    config: { directory, project: false, content: '{"model":"claude-acp/fixture-model"}' }, fs: { filewatcher: false, fff: false },
     plugins: [createPlugin({ command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log } }),
       // Run after the ACP hook, as another plugin can. Renumber markers between
       // requests to ensure host bookkeeping never invalidates the native cursor.
@@ -44,13 +44,12 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
     const { data } = await host.model.list({ location });
     return data.some((model) => model.providerID === 'claude-acp' && model.id === 'fixture-other' && model.variants.some((variant) => variant.id === 'max')) && data;
   }, 'ACP models in the native model catalog');
-  assert(inventory.some((model) => model.id === 'default' && model.providerID === 'claude-acp'));
+  assert(!inventory.some((model) => model.id === 'default' && model.providerID === 'claude-acp'), 'the generic default is not offered in the selector');
   // Desktop/web normalizes time.released into an ISO date, then defaults to
   // models from the last six months, keeping only the newest in each family.
   // An enabled API entry alone does not establish selector visibility.
   const acpModels = inventory.filter((model) => model.providerID === 'claude-acp');
   const variants = (id) => acpModels.find((model) => model.id === id).variants.map((variant) => variant.id);
-  assert.deepEqual(variants('default'), ['low', 'medium', 'high']);
   assert.deepEqual(variants('fixture-model'), ['low', 'medium', 'high']);
   assert.deepEqual(variants('fixture-other'), ['low', 'max']);
   assert.deepEqual(variants('fixture-no-effort'), []);
@@ -91,8 +90,8 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
   await host.sessions.wait({ sessionID });
   assert((await logs()).some((entry) => entry.method === 'session/set_config_option' && entry.params.value === 'fixture-other'));
   assert.deepEqual((await logs()).filter((entry) => entry.effective).at(-1).effective, { sessionId: prompts[0].params.sessionId, model: 'fixture-other', effort: 'max' });
-  await host.sessions.switchModel({ sessionID, model: { providerID: 'claude-acp', id: 'default' } });
-  await host.sessions.prompt({ sessionID, text: 'default restored' });
+  await host.sessions.switchModel({ sessionID, model: { providerID: 'claude-acp', id: 'fixture-model' } });
+  await host.sessions.prompt({ sessionID, text: 'named model restored' });
   await host.sessions.wait({ sessionID });
   assert.equal((await logs()).filter((entry) => entry.method === 'session/set_config_option' && entry.params.configId === 'model').at(-1).params.value, 'fixture-model');
   await host.sessions.switchModel({ sessionID, model: { providerID: 'claude-acp', id: 'fixture-model', variant: 'high' } });
@@ -142,4 +141,8 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
   await eventually(async () => (await logs()).some((entry) => entry.method === 'session/cancel'), 'ACP cancellation');
   assert((await logs()).some((entry) => entry.method === 'session/load'), 'persisted session is reloaded after interruption');
   assert.equal((await logs()).filter((entry) => entry.effective).at(-1).effective.effort, 'medium', 'selected effort is reapplied after session/load');
+  const configured = await host.sessions.create({ location });
+  await host.sessions.prompt({ sessionID: configured.id, text: 'configured default' });
+  await host.sessions.wait({ sessionID: configured.id });
+  assert.equal((await logs()).filter((entry) => entry.effective).at(-1).effective.model, 'fixture-model', 'new sessions use the configured named model');
 });

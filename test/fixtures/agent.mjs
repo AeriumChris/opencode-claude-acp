@@ -20,7 +20,8 @@ const result = (id, value) => send({ id, result: value });
 const update = (value) => send({ method: 'session/update', params: { sessionId, update: value } });
 const levels = () => model === 'fixture-no-effort' ? [] : model === 'fixture-other' ? ['default', 'low', 'max'] : ['default', 'low', 'medium', 'high'];
 const config = () => [{ id: 'model', name: 'Model', type: 'select', category: 'model', currentValue: model,
-  options: [{ value: 'fixture-model', name: 'Fixture Claude' }, { value: 'fixture-other', name: 'Other fixture model' },
+  options: [{ value: 'default', name: 'Default (recommended)' },
+    { value: 'fixture-model', name: 'Fixture Claude' }, { value: 'fixture-other', name: 'Other fixture model' },
     { value: 'fixture-no-effort', name: 'No effort fixture' }] },
   ...(levels().length ? [{ id: 'thinking-budget', name: 'Effort', type: 'select', category: 'thought_level', currentValue: effort,
     options: [{ group: 'supported', name: 'Supported', options: levels().map((value) => ({ value, name: value })) }] }] : [])];

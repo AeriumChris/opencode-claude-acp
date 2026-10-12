@@ -4,7 +4,7 @@ Use **Claude Code from OpenCode's model picker**, with model-specific effort sel
 
 This plugin connects OpenCode to the Claude Code CLI through the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/). It uses the Claude adapter used by Zed and runs on the **OpenCode server**, making the same provider available to the TUI, desktop app, and web clients connected to that server.
 
-**Provider:** `claude-acp` · **Display name:** Claude Code (ACP) · **Default model:** `claude-acp/default`
+**Provider:** `claude-acp` · **Display name:** Claude Code (ACP) · **Example model:** `claude-acp/opus`
 
 **Compatibility:** built and tested with **OpenCode V2 2.0.27**, **Node.js 22+**, and the pinned Claude ACP adapter **0.81.1**. Live verification was performed on Windows with Node.js 24. This repository is private and installed from a local build; it is not published to npm.
 
@@ -177,7 +177,7 @@ opencode service status
 opencode models
 ```
 
-Run the model command from the project where you intend to use the plugin. Look for the `claude-acp` provider/model entries. Discovery is asynchronous: the default entry may appear before individual models and effort variants.
+Run the model command from the project where you intend to use the plugin. Look for the `claude-acp` provider/model entries. Discovery is asynchronous: named models and their effort variants may take a moment to appear.
 
 These checks do not send a chat prompt. For a remote server, perform the installation/restart on that server and reconnect your clients to it.
 
@@ -239,12 +239,12 @@ Inside the TUI, enter:
 /models
 ```
 
-Select **Claude Code (ACP)** and a discovered model. The `default` entry delegates model choice to Claude's default. Use the effort/variant control when the selected model offers variants.
+Select **Claude Code (ACP)** and a discovered model. The generic `default` entry is omitted from the picker; choose a named model such as **Opus 5.5** (`opus`) when advertised. Use the effort/variant control when the selected model offers variants.
 
 For a one-shot CLI request, from your project directory:
 
 ```sh
-opencode run --model claude-acp/default "Explain the structure of this repository"
+opencode run --model claude-acp/opus "Explain the structure of this repository"
 ```
 
 To use a discovered model and effort, append `#variant`. For example, **only if `opus` and `high` appear in your catalog**:
@@ -267,12 +267,16 @@ If the provider is hidden, refresh the client and check **Manage models**. Expli
 
 ### Newest models
 
-Claude Code decides which models ACP offers, so a newer CLI can list models that an older one cannot. At each adapter start, the plugin uses the newest installed Claude Code that is newer than the adapter's bundled CLI:
+The default adapter uses the newest installed Claude Code version when it is strictly newer than the SDK's bundled copy. The plugin checks versioned installs under:
 
-- Claude desktop's managed copy (`%APPDATA%\Claude\claude-code\<version>`, including the Microsoft Store package's virtualized path, `~/Library/Application Support/Claude/claude-code/<version>` on macOS, or `~/.config/Claude/claude-code/<version>` on Linux).
-- The native installer (`~/.local/share/claude/versions/<version>`).
+- Native installer: `~/.local/share/claude/versions/<version>`.
+- Windows desktop: `%APPDATA%\Claude\claude-code\<version>\claude.exe`, including Store installs at `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code\<version>\claude.exe`.
+- macOS desktop: `~/Library/Application Support/Claude/claude-code/<version>`.
+- Linux desktop: `$XDG_CONFIG_HOME/Claude/claude-code/<version>`, or `~/.config/Claude/claude-code/<version>`.
 
-When the desktop app or native installer updates Claude Code, new models appear after the next discovery; restart the OpenCode service to refresh the picker. If no newer install exists, the bundled CLI is used. To pin a specific binary, set `CLAUDE_CODE_EXECUTABLE` in the service environment or in the plugin's `env` option.
+Only `x.y.z` entries with an existing executable are considered; incomplete downloads are skipped, and Windows requires `.exe`. If no newer install is found or the bundled version cannot be read, the adapter uses its bundled copy. Discovery reads files without running candidate binaries.
+
+After Claude updates, finish active work and [restart the OpenCode service](#update), then refresh the client to refresh the picker. The model list still comes from Claude Code. To pin a binary, set `CLAUDE_CODE_EXECUTABLE` in the server environment or [`options.env`](#configuration-options); `options.env` takes precedence. Custom ACP commands do not use automatic CLI discovery.
 
 ### Native tool activity
 
@@ -294,13 +298,15 @@ To activate this behavior after updating, rebuild the **configured plugin checko
 
 ### Optional default model
 
-To use this provider by default for new work, merge this field into the appropriate OpenCode config:
+To use Opus by default for new work, confirm `opus` appears in the catalog and merge this field into the appropriate OpenCode config:
 
 ```jsonc
 {
-  "model": "claude-acp/default"
+  "model": "claude-acp/opus"
 }
 ```
+
+The same setting is available in [`opencode.example.json`](opencode.example.json). After installing the plugin, merge it into `~/.config/opencode/opencode.json(c)` for a global default, preserving your existing settings. The `opus` alias currently advertises Opus 5.5 and follows the installed Claude Code catalog.
 
 Existing session selections take precedence. OpenCode V2's root model default does not retain an effort variant; choose effort in the session or a `run --model ...#variant` command.
 
@@ -311,7 +317,7 @@ In desktop/web, use **Attach file**, paste a screenshot, or drag and drop files 
 For the CLI:
 
 ```sh
-opencode run --model claude-acp/default --file screenshot.png "Explain what is wrong in this screenshot"
+opencode run --model claude-acp/opus --file screenshot.png "Explain what is wrong in this screenshot"
 ```
 
 | Input | Handling |
@@ -494,7 +500,7 @@ The shared catalog advertises `limit.context: 0` for ACP models. This is OpenCod
 
 ## Authentication and billing
 
-Claude authentication is handled by the **Claude CLI running as the server user**. Signing into an Anthropic API provider in OpenCode is not the same thing. An existing CLI can be selected with `CLAUDE_CODE_EXECUTABLE`; otherwise the bundled CLI is used.
+Claude authentication is handled by the **Claude CLI running as the server user**. Signing into an Anthropic API provider in OpenCode is not the same thing. An existing CLI can be selected with `CLAUDE_CODE_EXECUTABLE`; otherwise the plugin selects a newer installed copy or falls back to the bundled CLI. See [Newest models](#newest-models).
 
 **This plugin does not select, measure, or guarantee a subscription-only billing pool.** Billing depends on Anthropic's current policy, the authenticated account, and Claude's configuration. Successful functional tests do not prove which allowance was charged. Review the current [Anthropic plan/SDK guidance](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) and your account's usage settings.
 
@@ -574,7 +580,7 @@ Adjust the path if your bundled Node version or installation directory differs. 
 
 ### Remove
 
-Remove only this plugin's entry from the relevant `plugins` array, then restart the service. If you made `claude-acp/default` your configured default model, choose another provider. The checkout can then be removed if you no longer need it. Removing the plugin does not log out Claude or erase its native conversation history.
+Remove only this plugin's entry from the relevant `plugins` array, then restart the service. If you made a `claude-acp` model your configured default, choose another provider. The checkout can then be removed if you no longer need it. Removing the plugin does not log out Claude or erase its native conversation history.
 
 ## Troubleshooting
 
@@ -582,7 +588,7 @@ Remove only this plugin's entry from the relevant `plugins` array, then restart 
 | --- | --- |
 | Provider missing everywhere | Verify the plugin is in server-side `opencode.json(c)`, the directory URL is correct, the build exists, and the server restarted. Inspect `opencode api get /api/plugin` and `opencode models` from the affected project. |
 | Present in API/TUI, missing in desktop/web | Refresh the client, confirm it connects to the same server/project, and enable it in **Manage models** if explicitly hidden. |
-| Only the default model is shown | Give discovery time. Check bundled CLI sign-in and executable paths. Discovery failures leave the default entry; a submitted prompt will surface startup/auth errors. |
+| No Claude models are shown | Give discovery time. Check Claude CLI sign-in and executable paths. Discovery failures leave no named models; the generic default entry is not offered. |
 | No effort picker | The selected model may not advertise effort, or discovery is still running. Use only variants returned by the current catalog. |
 | Node/adapter fails to start | Use an absolute `nodeExecutable`, ensure Node 22+, and rerun `npm ci`/build. A terminal's `PATH` can differ from the background service's. |
 | Native tools only appear after finishing, or show `title=toolu_…` | Update and rebuild the checkout referenced by the configured plugin package, then restart the service after active work finishes. Existing history retains its old display entries. |
@@ -673,6 +679,7 @@ The tests use a protocol fixture through the **real OpenCode host and HTTP serve
 
 | Test | Coverage |
 | --- | --- |
+| [`test/claude-cli.test.mjs`](test/claude-cli.test.mjs) | Versioned native/desktop/Store CLI discovery, incomplete installs, Windows executable filtering, bundled-version fallback, and command overrides. |
 | [`test/activity.test.mjs`](test/activity.test.mjs) | Pending and concurrent running tools observed before fixture completion, refined titles/inputs, sparse and duplicate results, approval handoffs, cancellation, and missing terminal status. |
 | [`test/compaction.test.mjs`](test/compaction.test.mjs) | Manual/automatic checkpoints, exactly-once pending prompts, real service-host reopen, attachments, forks/reverts, provider switching and summarization, approval/relay continuations, adapters without native loading, missing/circular archives, and separate image-class identities. |
 | [`test/bundled.test.mjs`](test/bundled.test.mjs) | Opt-in release-executable integration: silent-body image checkpoints, restart/fork recovery, no automatic checkpoint during tool handoff, and DCP-style plain-object context edits. Uses an isolated server and fixture ACP process. |
@@ -683,7 +690,6 @@ The tests use a protocol fixture through the **real OpenCode host and HTTP serve
 | [`test/tools.test.mjs`](test/tools.test.mjs) | Before/after hooks, parallel calls, upstream MCP, Code Mode, errors, hidden tools, native host permission denial, forms, cancellation, image results, catalog refresh, and relay authentication/isolation. |
 | [`test/instructions.test.mjs`](test/instructions.test.mjs) | Root/nested `AGENTS.md` reads and same-turn scoped guidance, follow-up continuity, and exclusion of unrelated host system instructions. |
 | [`test/workflow.test.mjs`](test/workflow.test.mjs) | Gated foreground CI wait across idle-timeout duration, publish/verification handoffs in one ACP prompt, failure handling, and changing DCP warnings. Fixture-driven; does not establish real-model instruction adherence or publish a GitHub release. |
-| [`test/claude-cli.test.mjs`](test/claude-cli.test.mjs) | Newest-install selection across desktop, Store, and native-installer layouts; bundled-version fallback. |
 | [`test/prompt.test.mjs`](test/prompt.test.mjs) | Verified DCP-reminder/ID cleanup, preservation of user-authored warnings and unrelated guidance, and missing-source handling. |
 
 The repository includes a [GitHub Actions workflow](.github/workflows/ci.yml) for Windows and Ubuntu with Node.js 24.
@@ -717,9 +723,11 @@ These checks have passed locally with the bundled adapter/CLI. They use temporar
 | File | Responsibility |
 | --- | --- |
 | [`server.js`](server.js) | Local-directory plugin loader entrypoint. |
+| [`opencode.example.json`](opencode.example.json) | Configuration example selecting Opus as the default model. |
 | [`src/index.ts`](src/index.ts) | Provider registration, model/effort metadata, and OpenCode hooks. |
 | [`src/provider.ts`](src/provider.ts) | Native model transport and stream cancellation. |
 | [`src/acp.ts`](src/acp.ts) | Subprocess lifecycle, protocol connection, and session/model/effort negotiation. |
+| [`src/claude-cli.ts`](src/claude-cli.ts) | Synchronous installed CLI discovery and comparison with the adapter's bundled Claude Code version. |
 | [`src/bridge.ts`](src/bridge.ts) | History tracking, event translation, tool/approval continuation, and scoped guidance. |
 | [`src/compaction.ts`](src/compaction.ts) | Persistent host checkpoints and restoration through the pinned OpenCode history converter. |
 | [`src/native-tools.ts`](src/native-tools.ts) | Native activity state, partial ACP updates, and display continuity across host steps. |
@@ -728,7 +736,6 @@ These checks have passed locally with the bundled adapter/CLI. They use temporar
 | [`src/prompt.ts`](src/prompt.ts) | Removal of verified generated message-ID suffixes. |
 | [`src/usage.ts`](src/usage.ts) | Usage validation, native token mapping, persisted observations, and local reports. |
 | [`src/options.ts`](src/options.ts) | Plugin option validation and adapter command selection. |
-| [`src/claude-cli.ts`](src/claude-cli.ts) | Selection of the newest installed Claude Code over the adapter's bundled CLI. |
 | [`src/queue.ts`](src/queue.ts), [`src/registry.ts`](src/registry.ts) | Event queue and per-plugin bridge lookup. |
 
 ### References and acknowledgements
