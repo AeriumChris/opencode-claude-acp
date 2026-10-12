@@ -671,6 +671,12 @@ Yes: available OpenCode MCP and plugin tools are exposed through a session-speci
 
 No. This is an independent integration using the Claude ACP adapter and OpenCode's plugin API. It is not affiliated with or endorsed by Anthropic, OpenCode, or Zed.
 
+### Is this a supported way to use Claude? Can it get my account banned?
+
+**Anthropic explicitly permits Claude Agent SDK and third-party app usage in its current plan guidance.** This plugin connects through the Claude ACP adapter to Anthropic's official Claude Agent SDK and Claude Code CLI. In its [October 7, 2026 update](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan), Anthropic states: “You can still use the Claude Agent SDK, `claude -p`, and third-party apps with your subscription limits.”
+
+That guidance supports this underlying access method; it is not an endorsement of this particular plugin or a guarantee against account suspension. We cannot promise that any third-party integration “will not get you banned.” Your usage remains subject to Anthropic's terms, usage policies, and account eligibility. See [authentication and billing](#authentication-and-billing) for the observed integration-mode caveat.
+
 ## How it works
 
 The external-agent approach is inspired by Zed:
