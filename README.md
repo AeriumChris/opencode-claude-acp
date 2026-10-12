@@ -6,7 +6,7 @@ This plugin connects OpenCode to the Claude Code CLI through the [Agent Client P
 
 **Provider:** `claude-acp` · **Display name:** Claude Code (ACP) · **Example model:** `claude-acp/opus`
 
-**Compatibility:** built and tested with **OpenCode V2 2.0.27**, **Node.js 22+**, and the pinned Claude ACP adapter **0.81.1**. Live verification was performed on Windows with Node.js 24. This repository is private and installed from a local build; it is not published to npm.
+**Compatibility:** built and tested with **OpenCode V2 2.0.27**, **Node.js 22+**, and the pinned Claude ACP adapter **0.89.1**. Live verification was performed on Windows with Node.js 24. This repository is private and installed from a local build; it is not published to npm.
 
 ## Contents
 
@@ -266,6 +266,8 @@ These `run` commands send actual Claude requests. Use an interactive client for 
 If the provider is hidden, refresh the client and check **Manage models**. Explicit hidden-model preferences take precedence over the plugin's defaults.
 
 ### Newest models
+
+The picker includes every named model advertised by Claude Code, including older versions. Adapter **0.89.1** updates the bundled Claude runtime to expose Sonnet 5.5, Haiku 5.5, and the available older lineup. Model names and availability come from Claude for your account. Keep the plugin dependencies updated as well as any separately installed Claude Code: an outdated bundled runtime can return an outdated model list.
 
 The default adapter uses the newest installed Claude Code version when it is strictly newer than the SDK's bundled copy. The plugin checks versioned installs under:
 
