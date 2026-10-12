@@ -1,6 +1,6 @@
 # OpenCode Claude Code Plugin — ACP Integration
 
-**Built on Anthropic's official Claude Agent SDK.** Anthropic's [current guidance explicitly permits SDK and third-party app usage with Claude plans](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan). This plugin is independent, not Anthropic-endorsed; account eligibility and policies still apply, so no “ban-free” guarantee is possible.
+**Built on Anthropic's official Claude Agent SDK.** Anthropic's [current guidance explicitly permits SDK and third-party app usage with Claude plans](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan). This plugin is independent, not Anthropic-endorsed; account eligibility and policies still apply.
 
 Use **Claude Code in OpenCode's terminal, desktop app, and web UI** with your Claude Code sign-in. `opencode-claude-acp` connects through the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/)—no Anthropic API key needs to be added to OpenCode.
 
