@@ -19,7 +19,7 @@ type ToolCall = { token: string; name: string; input: unknown; started: boolean;
 type Packet = { update: SessionUpdate } | { permission: Pending } | { tool: ToolCall };
 type Turn = { queue: Queue<Packet>; permissions: Map<string, Pending>; tools: Map<string, ToolCall>;
   nativeTools: NativeTools; paused?: Pending | ToolCall; streaming: boolean; stopReason?: string; usage?: unknown; report: UsageReport };
-type Entry = { acp: AcpConnection; relay: ToolRelay; catalog: string; deliveredInstructions: string;
+type Entry = { acp: AcpConnection; relay: ToolRelay; catalog: string; system?: string; deliveredInstructions: string;
   ready: Promise<void>; users: string[]; allowAll?: boolean; turn?: Turn; idle?: NodeJS.Timeout };
 
 export interface Persistence {
@@ -67,19 +67,20 @@ export class Bridge {
     finally { acp.close(); this.discoveries.delete(acp); }
   }
 
-  private async entry(id: string, directory: string, tools: readonly ToolEntry[]) {
+  private async entry(id: string, directory: string, tools: readonly ToolEntry[], system?: string) {
     if (this.closed) throw new Error('Claude ACP plugin has closed.');
     let entry = this.entries.get(id);
     const catalog = createHash('sha256').update(JSON.stringify(tools)).digest('hex');
-    // Claude caches MCP discovery per connection. Resume the native session on
-    // a fresh connection when the tool catalog changes between user turns.
-    if (entry && !entry.turn && entry.catalog !== catalog) { this.cancel(id); entry = undefined; }
+    // Claude caches instructions and MCP discovery per connection. Reload the
+    // same native history with the new host configuration between user turns.
+    // Never restart a prompt paused on a host tool: its side effects may be live.
+    if (entry && !entry.turn && (entry.catalog !== catalog || entry.system !== system)) { this.cancel(id); entry = undefined; }
     if (entry && entry.acp.directory !== directory) {
       await this.reset(id);
       entry = undefined;
     }
     if (entry) { clearTimeout(entry.idle); entry.relay.update(tools); await entry.ready; return entry; }
-    const created: Entry = { acp: undefined!, relay: undefined!, catalog, deliveredInstructions: '', ready: Promise.resolve(), users: [] };
+    const created: Entry = { acp: undefined!, relay: undefined!, catalog, system, deliveredInstructions: '', ready: Promise.resolve(), users: [] };
     created.relay = new ToolRelay((name, input) => {
       const turn = created.turn;
       if (!turn) return Promise.resolve(toolError('No active OpenCode turn.'));
@@ -117,7 +118,7 @@ export class Bridge {
       const saved = await this.storage.get(id) as Saved | undefined;
       created.allowAll = saved?.directory === directory && saved.allowAll === true;
       const server = await created.relay.start();
-      const resumed = await created.acp.start(saved?.directory === directory ? saved.sessionID : undefined, [server]);
+      const resumed = await created.acp.start(saved?.directory === directory ? saved.sessionID : undefined, [server], system);
       if (resumed && saved) created.users = saved.users;
       this.inventory(modelChoices(created.acp.config));
     })();
@@ -160,8 +161,9 @@ export class Bridge {
     const ids = request.providerOptions?.acpInstructionIDs;
     const instructionIDs = new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []);
     const messages = cleaned.filter((message) => !instructionIDs.has(message.id ?? ''));
-    // Only repository guidance loaded by OpenCode's read tool crosses here.
-    // The host agent/system prompt remains owned by OpenCode.
+    // Read the final request here, after all plugins' context hooks have run.
+    const system = this.options.integrationMode === 'opencode' ? request.system.map((part) => part.text).join('\n\n') : undefined;
+    // Scoped repository guidance can arrive during a live tool continuation.
     const instructions = cleaned.filter((message) => instructionIDs.has(message.id ?? '')).flatMap((message) =>
       message.content.filter((part) => part.type === 'text').map((part) => part.text)).join('\n\n');
     this.originalTexts.delete(sessionID);
@@ -179,14 +181,14 @@ export class Bridge {
     };
     try {
       if (signal.aborted) throw new Error('Claude ACP request cancelled.');
-      entry = await this.entry(sessionID, directory, request.tools);
+      entry = await this.entry(sessionID, directory, request.tools, system);
       if (signal.aborted) throw new Error('Claude ACP request cancelled.');
       if (entry.turn?.streaming) throw new Error('A Claude ACP turn is already streaming for this session.');
       const incomingUsers = messages.filter((message) => message.role === 'user').map(hash);
       if (entry.turn?.paused && (incomingUsers.length !== entry.users.length || incomingUsers.some((value, index) => value !== entry!.users[index]))) {
         // A new user turn must never be consumed as continuation of a dismissed approval.
         this.cancel(sessionID);
-        entry = await this.entry(sessionID, directory, request.tools);
+        entry = await this.entry(sessionID, directory, request.tools, system);
       }
       if (entry.turn?.paused) {
         const permission = entry.turn.paused;
@@ -223,7 +225,7 @@ export class Bridge {
           // Reverts or external history edits invalidate the native cursor.
           // Our checkpoints restore original messages before reaching this point.
           await this.reset(sessionID);
-          entry = await this.entry(sessionID, directory, request.tools);
+          entry = await this.entry(sessionID, directory, request.tools, system);
         }
         if (fingerprints.length === entry.users.length) throw new Error('Refusing to replay a Claude ACP prompt that was already submitted. Send a new message.');
         await entry.acp.selectModel(modelID);
@@ -244,7 +246,7 @@ export class Bridge {
           }
           prompt.push({ type: 'text', text: '</conversation_history>' });
         }
-        // Claude owns its system prompt/tools/CLAUDE.md. OpenCode's agent prompt is not forwarded.
+        // System instructions are configured separately, never turned into user input.
         const newUsers = entry.users.length ? users.slice(entry.users.length) : users.slice(-1);
         for (const message of newUsers) {
           prompt.push(...contentBlocks(message, entry.acp.supportsImages));

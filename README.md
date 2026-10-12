@@ -1,12 +1,16 @@
-# Claude Code ACP for OpenCode
+# OpenCode Claude Code Plugin — ACP Integration
 
-Use **Claude Code from OpenCode's model picker**, with model-specific effort selection, screenshots, repository access, and OpenCode plugin/MCP tools.
+**Use Claude Code in OpenCode's terminal, desktop app, and web UI.** `opencode-claude-acp` is an OpenCode V2 plugin that adds Anthropic Claude models to the model picker using your Claude Code sign-in, with streaming, model-specific effort selection, screenshots, and OpenCode plugin/MCP tools.
 
 This plugin connects OpenCode to the Claude Code CLI through the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/). It uses the Claude adapter used by Zed and runs on the **OpenCode server**, making the same provider available to the TUI, desktop app, and web clients connected to that server.
 
 **Provider:** `claude-acp` · **Display name:** Claude Code (ACP) · **Example model:** `claude-acp/opus`
 
-**Compatibility:** built and tested with **OpenCode V2 2.0.27**, **Node.js 22+**, and the pinned Claude ACP adapter **0.89.1**. Live verification was performed on Windows with Node.js 24. This repository is private and installed from a local build; it is not published to npm.
+**Compatibility:** built and tested with **OpenCode V2 2.0.27**, **Node.js 22+**, and the pinned Claude ACP adapter **0.89.1**. Live verification was performed on Windows with Node.js 24. Install this public repository from a local build; it is not published to npm.
+
+**Start here:** [Installation](#install-from-a-terminal) · [Claude model selection](#use-it-in-the-tui-desktop-and-web) · [Authentication and billing](#authentication-and-billing) · [Troubleshooting](#troubleshooting)
+
+The default **native integration mode** preserves Claude Code's own instructions and tools while adding OpenCode's MCP tool relay. Deeper OpenCode agent integration is available as an explicit opt-in; see [integration modes](#repository-files-and-agentsmd) for its behavior and billing caveat.
 
 ## Contents
 
@@ -26,6 +30,7 @@ This plugin connects OpenCode to the Claude Code CLI through the [Agent Client P
 - [Update or remove](#update-or-remove)
 - [Troubleshooting](#troubleshooting)
 - [Current limitations](#current-limitations)
+- [Frequently asked questions](#frequently-asked-questions)
 - [How it works](#how-it-works)
 - [Development and verification](#development-and-verification)
 
@@ -41,6 +46,7 @@ This plugin connects OpenCode to the Claude Code CLI through the [Agent Client P
 | **Repository access** | Claude can read, search, edit, and run commands in the server-side project, subject to tool permissions and OS access. |
 | **Repository guidance** | Claude is instructed to read root and applicable nested `AGENTS.md` files. Scoped guidance discovered by OpenCode's read tool reaches the same Claude turn. Native `CLAUDE.md` support remains available. |
 | **OpenCode plugin tools** | Tools are exposed to Claude through a session-specific MCP relay and executed by OpenCode, including before/after tool hooks. |
+| **Agent integration** | Optional `integrationMode: "opencode"` forwards Build, Plan, Orchestrator, and custom-agent system instructions and uses host-only tools. The default preserves Claude's native preset and tools. |
 | **Existing MCP connections** | Claude can use available OpenCode MCP tools, including Code Mode discovery/execution. Upstream authentication stays in OpenCode. |
 | **Approvals and questions** | Compact ACP approval forms offer one-time approval, adapter-provided persistent choices, and **Allow all (session)**. Set `permissionMode: "allow"` for automatic ACP approval across sessions. Relayed tools retain OpenCode's own permissions and forms. |
 | **Conversation continuity** | Follow-ups reuse the native Claude session. Saved sessions reload after idle shutdown; history bootstrap preserves prior text and images. |
@@ -49,15 +55,15 @@ This plugin connects OpenCode to the Claude Code CLI through the [Agent Client P
 | **Usage reporting** | Reported input, output, and cache tokens populate OpenCode's native counters. `/claude-usage` shows completed-turn totals, context occupancy/capacity, and the latest ACP cost reading without calling Claude. |
 | **Context capacity** | `/claude-usage` shows ACP's reported native capacity. Automatic OpenCode context-limit checkpoints are disabled for ACP models; Claude manages its own context. |
 
-Tool compatibility does not mean every OpenCode feature controls Claude's internal agent loop. See [plugin compatibility](#plugin-and-mcp-compatibility) and [current limitations](#current-limitations), especially for DCP, agent instructions, and plan mode.
+Claude still manages its internal conversation and model requests. See [plugin compatibility](#plugin-and-mcp-compatibility) and [current limitations](#current-limitations) for differences from a direct API provider.
 
 ## Requirements
 
 - **OpenCode V2**, with version 2.0.27 being the tested host version. V1 is not supported by this implementation. Keep the plugin's OpenCode and Effect dependencies aligned with the host; incompatible Effect exports can prevent the provider from loading.
 - **Node.js 22 or newer**, npm, and Git on the machine running the OpenCode server.
-- GitHub access to **[AeriumChris/opencode-claude-acp](https://github.com/AeriumChris/opencode-claude-acp)** while the repository is private.
+- A checkout of **[AeriumChris/opencode-claude-acp](https://github.com/AeriumChris/opencode-claude-acp)** on the server machine.
 - A working Claude Code sign-in for the **same OS user that runs the server**.
-- OpenCode's built-in **`question` tool enabled** for ACP approvals.
+- In the default **native integration mode**, OpenCode's built-in `question` tool enabled for ACP approvals.
 
 The adapter includes a Claude CLI, so a separate global `claude` installation is optional. OpenCode's Anthropic API-key provider and this ACP provider have separate authentication paths.
 
@@ -347,7 +353,7 @@ Warm follow-ups reuse Claude's native image context without retransmitting it. I
 
 The session's project directory is Claude's working directory. Files are read on demand; the plugin does not put the entire repository or every OpenCode conversation into the prompt.
 
-Claude can use OpenCode's relayed file/search/edit/shell tools and its native tools, subject to the respective permissions and OS access. Files and commands run on the **server machine**.
+By default, Claude can use its own tools and OpenCode's relayed file/search/edit/shell tools. Relayed tools are subject to host permissions and OS access. Files and commands run on the **server machine**. Optional `integrationMode: "opencode"` restricts tools to the host relay.
 
 For repository instructions, use **`AGENTS.md`** with that casing on case-sensitive filesystems:
 
@@ -363,13 +369,17 @@ Claude is instructed to read the root guidance before repository work and check 
 
 Ask Claude to re-read the applicable files after you change them. This is model-followed guidance, not a filesystem enforcement mechanism. Native `CLAUDE.md` and Claude user/project/local settings continue to load through the Claude adapter.
 
-OpenCode's global system instructions and custom agent system prompts are not automatically imported. Selecting OpenCode's plan agent does not activate Claude's native plan mode.
+The opt-in `integrationMode: "opencode"` passes the final OpenCode system instructions to Claude, including global/repository guidance, the selected agent's prompt, and other plugins' context-hook changes. These remain system instructions rather than being inserted into user messages. Plan uses OpenCode's instructions and host tool restrictions; it does not activate Claude's separate native plan mode.
+
+In OpenCode mode, agent or system-instruction changes take effect at the next new user turn by resuming the same Claude session with updated instructions. An active tool continuation completes without replaying its user prompt. The default `integrationMode: "native"` retains Claude's own system preset and native tools and does not import OpenCode's system prompt.
+
+OpenCode mode changes the request's system prompt and tools and has been reported to trigger Anthropic's HTTP 400 “Third-party apps now draw from your extra usage” error. It is opt-in because subscription billing compatibility has not been established. Anthropic's [current SDK plan guidance](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) says the June billing change is paused, including in its October 7 update; that does not explain this request-specific rejection. Billing classification is controlled by Anthropic, and this plugin cannot guarantee which usage pool applies.
 
 ## Plugin and MCP compatibility
 
 No separate MCP configuration is needed for the relay. The plugin exposes the session's final available OpenCode tool catalog through an authenticated, loopback-only MCP server named **`opencode`**.
 
-Claude is instructed to prefer these tools for operations they support. A call pauses its ACP turn, runs through OpenCode's normal tool engine, and returns the final result to that original turn. Input validation, before/after hooks, tool-specific permission checks, and forms remain in OpenCode. Text, JSON, errors, inline images, and file links are supported.
+In opt-in OpenCode mode, Claude's built-in tools are disabled and its MCP configuration is restricted to the relay. A call pauses its ACP turn, runs through OpenCode's normal tool engine, and returns the final result to that original turn. Input validation, before/after hooks, tool-specific permission checks, and forms remain in OpenCode. Text, JSON, errors, inline images, and file links are supported.
 
 | Integration | Compatibility |
 | --- | --- |
@@ -377,25 +387,26 @@ Claude is instructed to prefer these tools for operations they support. A call p
 | `tool.execute.before` / `tool.execute.after` | Run on relayed host tools, including changes to inputs and results. |
 | Existing OpenCode MCP tools | Callable through OpenCode's existing connections. Upstream OAuth credentials are not copied to Claude. |
 | Code Mode | Claude can use the relayed `execute` tool and its `search` facility to discover/call available tools. |
-| Skill and delegation tools | Callable when present in the session catalog. Returned content reaches Claude; this does not mirror OpenCode's agent system prompts. |
+| Skill and delegation tools | Callable when present in the session catalog. Returned content reaches Claude, and the selected agent's system instructions are forwarded in OpenCode mode. |
 | UI and event plugins | Continue running in OpenCode; this bridge does not reproduce their UI inside Claude CLI. |
-| RTK-style command rewriting | Applies when the installed integration hooks a **relayed OpenCode shell tool**. Claude's native Bash calls bypass those hooks. |
+| RTK-style command rewriting | Applies when the installed integration hooks a **relayed OpenCode shell tool**. Default native mode also permits Claude-native Bash calls that bypass those hooks. |
 | DCP | Partial compatibility: generated message-ID suffixes and host compression nudges are cleaned up without resetting the native conversation. Pruning OpenCode's history does not prune Claude's separate native history. |
 | Anthropic HTTP/body rewriting plugins | Do not intercept the model traffic made inside Claude CLI. |
-| System-prompt, plan-mode, or compaction plugins | Do not automatically control Claude's native agent loop. |
+| System-prompt and agent plugins | Final system instructions reach Claude in OpenCode mode; host tool restrictions apply through the relay. |
+| Compaction plugins | Host checkpoints preserve continuity; they do not rewrite Claude's internal history. |
 
 Hidden or unavailable tools cannot be called through the relay. Each session has its own endpoint and bearer token. Catalog changes are applied on a subsequent user turn by reconnecting and resuming the native session. Parallel MCP calls are serviced through the host tool loop.
 
-For an OpenCode MCP server that needs authentication, complete its sign-in in OpenCode first. Claude-native MCP configuration remains separate. The relay does not automatically enable tools that your host configuration disabled.
+For an OpenCode MCP server that needs authentication, complete its sign-in in OpenCode first. Claude-native MCP configuration is used only in native integration mode. The relay does not automatically enable tools that your host configuration disabled.
 
 ## Permissions and cancellation
 
-There are two tool paths:
+Opt-in OpenCode mode uses the first tool path only. Default native mode enables both:
 
 1. **Relayed OpenCode tools:** OpenCode executes the operation with its existing tool behavior, permission checks, and hooks.
 2. **Native Claude tools:** Claude Code executes the operation with its own configuration and permissions. OpenCode tool hooks do not intercept it.
 
-When the adapter asks for ACP permission, the plugin displays an OpenCode **question form** containing only the operation title, followed by the approval choices. For example:
+In OpenCode mode the relay is preapproved on the Claude side; OpenCode still checks each host operation. If the adapter asks for a separate ACP permission (normally in native mode), the plugin displays an OpenCode **question form** containing only the operation title, followed by the approval choices. For example:
 
 ```text
 Claude Code requests permission: Write frontend\widgets\AeriumFriendsPanel.cpp
@@ -429,7 +440,7 @@ Preserve any other plugin options and entries, then restart the OpenCode service
 
 These settings cover ACP approvals. Relayed OpenCode tools still use OpenCode's own permission rules. To also allow those tools by default, add `{ "action": "*", "resource": "*", "effect": "allow" }` to the top-level `permissions` array; later agent rules and policies can still restrict them. Ordinary questions asking for information or decisions still require an answer.
 
-Keep the built-in `question` tool enabled. The tested OpenCode plugin API cannot directly create native permission requests, so the bridge uses this shared question UI. A relayed call can require both an ACP approval and the host tool's own permission/form. Operations already permitted by Claude's native settings may not ask an ACP question.
+Keep the built-in `question` tool enabled in native mode. The tested OpenCode plugin API cannot directly create native permission requests, so the bridge uses this shared question UI. In native mode, a relayed call can require both an ACP approval and the host tool's own permission/form. Operations already permitted by Claude's native settings may not ask an ACP question.
 
 Use **Stop** to interrupt a turn. Cancellation closes pending relay work and interrupts Claude; individual tool implementations must cooperate with cancellation to stop their underlying operation. Completed side effects are not rolled back.
 
@@ -506,7 +517,7 @@ Claude authentication is handled by the **Claude CLI running as the server user*
 
 **This plugin does not select, measure, or guarantee a subscription-only billing pool.** Billing depends on Anthropic's current policy, the authenticated account, and Claude's configuration. Successful functional tests do not prove which allowance was charged. Review the current [Anthropic plan/SDK guidance](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) and your account's usage settings.
 
-During development, a combined experiment forwarding OpenCode's full agent instructions and mapping plan mode returned a third-party extra-usage error. That feature was dropped rather than worked around. Ordinary root/nested `AGENTS.md` reads subsequently passed a live test without that error. The failed experiment does not establish that all ACP usage requires extra usage.
+As of October 13, 2026, Anthropic's guidance (updated October 7) says the announced SDK billing change remains paused and SDK/third-party apps can still use subscription limits. However, switching this plugin to a custom OpenCode system prompt and host-only tools produced a third-party extra-usage error in a user session. Restoring native mode resolved the reported error. Native mode is therefore the default; `integrationMode: "opencode"` remains opt-in with unverified subscription billing compatibility. This observation does not establish Anthropic's classification rules or prove which usage pool was charged.
 
 If you require plan-only usage and see an extra-usage error, stop the request and check the account/policy. The plugin does not enable extra usage or switch you to an API key to resolve it.
 
@@ -523,6 +534,7 @@ All options are optional and belong inside the configured plugin entry's `option
 | `startupTimeoutMs` | `30000` | Initialization and session creation/load deadline, in milliseconds. |
 | `idleTimeoutMs` | `300000` | Close completed inactive connections after this many milliseconds. |
 | `permissionMode` | `"ask"` | `"allow"` automatically approves ACP permission requests; OpenCode tool permissions still apply. |
+| `integrationMode` | `"native"` | Retains Claude's preset, native tools, and native MCP configuration alongside the relay. Opt-in `"opencode"` uses the final host system prompt and host-only tools; subscription billing compatibility is unverified. |
 
 Timeouts must be positive 32-bit integers. Unknown option names are rejected.
 
@@ -601,7 +613,8 @@ Remove only this plugin's entry from the relevant `plugins` array, then restart 
 | Huge approval text hides the buttons | Update and rebuild the checkout referenced by the plugin's `package` path in `opencode.json(c)`, then restart the service and retry the operation. Updating a different clone does not update the installed plugin. Current prompts contain only a bounded operation title; existing forms retain their original text. |
 | Repeated ACP approval questions | Choose **Allow always** for an adapter-provided rule, **Allow all (session)** for the current session, or set `options.permissionMode` to `"allow"` across sessions. See [Permissions and cancellation](#permissions-and-cancellation). |
 | Still prompted after enabling automatic ACP approval | Check whether the prompt is an OpenCode tool permission or an ordinary question. These have separate behavior from ACP approvals. |
-| Plan agent still permits native edits | OpenCode plan mode is not mapped to Claude. Its host permissions do not govern Claude-native tools. |
+| Plan agent still permits native edits | Default native mode leaves Claude-native tools outside host tool permissions. Opt-in `integrationMode: "opencode"` uses host-only tools; see the billing caveat above before enabling it. |
+| HTTP 400: third-party apps draw from extra usage | If using OpenCode mode, restore `integrationMode: "native"` and reload the plugin. If it persists, contact Anthropic with the error and its current SDK plan guidance; adding paid credits is not a required plugin setup step. |
 | Stuck showing Compacting after a failed turn | Older versions threw during host compaction. Update/rebuild the configured plugin checkout, restart the matching service, and retry. Current versions complete local checkpoints; see [Context compaction](#context-compaction). |
 | CI succeeds but promised follow-up never happens | Use the foreground monitoring path in [CI monitoring and background tasks](#ci-monitoring-and-background-tasks). Native background callbacks cannot resume an ended OpenCode turn. Update/rebuild the configured checkout for the foreground guard and guidance. |
 | DCP says max context was reached unexpectedly | Compare `/claude-usage` with the warning: host turn totals and native context usage are different. Update for verified DCP-reminder cleanup; see [Context compaction](#context-compaction). |
@@ -626,15 +639,37 @@ Run them from the affected project; catalog/configuration is location-scoped. Fo
 
 ## Current limitations
 
-- **OpenCode agent system prompts and native plan-mode mapping are not implemented.** Repository `AGENTS.md` reads are the supported narrower guidance path.
+- **System updates apply between user turns.** Agent/system changes do not restart an active tool continuation. OpenCode Plan uses host instructions and permissions rather than mapping to Claude's native plan mode.
 - **Host checkpoints depend on local plugin storage.** They preserve continuity without invoking native Claude compaction. Auxiliary generation remains unsupported. See [Context compaction](#context-compaction).
 - **Usage depends on ACP reporting.** Missing/interrupted-turn totals and historical usage cannot be reconstructed. ACP cost is shown by `/claude-usage`, separately from OpenCode's price-table dollar counter. Context capacity updates when reported; output-token limits remain OpenCode defaults. See [Usage, cost, and token limits](#usage-cost-and-token-limits).
-- **Not every plugin applies.** Host HTTP/system/compaction hooks do not control Claude's internal requests/history. Native Claude tools bypass host tool hooks.
+- **Not every plugin applies.** Host HTTP/compaction hooks do not control Claude's internal requests/history. System instructions are forwarded in OpenCode mode; native-mode Claude tools bypass host tool hooks. Claude user/project settings and hooks may still load in either mode.
 - **Native background callbacks do not wake OpenCode.** Native background tasks are disabled; dependent CI/release work should remain in foreground calls until verified.
 - Native mode selectors, slash-command discovery, and native edit-review UI are not implemented.
 - Unsupported binary documents and direct remote media references are not converted into model-readable content.
 - The implementation targets the pinned Claude adapter's configuration-options API, not every ACP agent or arbitrary OpenCode version.
 - Desktop/web **shared-server API behavior is integration-tested**. Automated visual browser verification remains outstanding; the user has confirmed model selection works in the installed clients.
+
+## Frequently asked questions
+
+### How do I use Claude Code in OpenCode?
+
+Build this plugin, register its local directory in OpenCode's `plugins` configuration, and sign into Claude Code as the user running the OpenCode server. Select **Claude Code (ACP)** in the model picker. Follow the [installation guide](#install-from-a-terminal) for Windows, macOS, and Linux commands.
+
+### Do I need an Anthropic API key?
+
+You do not need to add an Anthropic API key to OpenCode for this provider. It uses the Claude Code CLI's authentication, separate from OpenCode's direct Anthropic API provider. Subscription eligibility and billing remain controlled by Anthropic; see [authentication and billing](#authentication-and-billing).
+
+### Which Claude Opus, Sonnet, and Haiku models are supported?
+
+The plugin discovers the models advertised by your Claude runtime and account, including older versions when available. Verified catalogs have included Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1, and earlier models. The list is not hardcoded, and availability can change. See [newest models](#newest-models) for runtime updates and model discovery.
+
+### Does this work with OpenCode MCP servers and custom agents?
+
+Yes: available OpenCode MCP and plugin tools are exposed through a session-specific relay. Default native mode preserves Claude Code's own system prompt and native tools. Opt-in OpenCode mode also forwards custom-agent instructions and restricts tools to the host catalog, but has the billing compatibility caveat described above. See [plugin and MCP compatibility](#plugin-and-mcp-compatibility).
+
+### Is this an official Anthropic or OpenCode plugin?
+
+No. This is an independent integration using the Claude ACP adapter and OpenCode's plugin API. It is not affiliated with or endorsed by Anthropic, OpenCode, or Zed.
 
 ## How it works
 
@@ -660,7 +695,7 @@ OpenCode plugin + native provider transport
 OpenCode tool engine -> plugin tools / connected MCP tools
 ```
 
-Claude owns its agent loop and native settings. The adapter exposes its model/effort configuration, streamed output, tool activity, and permission requests over ACP. The plugin translates those into OpenCode's server catalog and session events.
+Claude owns its internal agent loop and history. Default native mode retains Claude's preset and native tools; opt-in OpenCode mode supplies the host system instructions and executable tool catalog. The adapter exposes model/effort configuration, streamed output, tool activity, and permission requests over ACP. The plugin translates those into OpenCode's server catalog and session events.
 
 The MCP relay keeps tool execution inside OpenCode instead of calling plugin implementations directly. This preserves host hooks and final results while allowing Claude to continue its original prompt. The relay listens only on loopback and uses a separate bearer token per session.
 
@@ -690,7 +725,7 @@ The tests use a protocol fixture through the **real OpenCode host and HTTP serve
 | [`test/http.test.mjs`](test/http.test.mjs) | Loading the configured local plugin directory; shared model/session/approval APIs across two clients; image/text attachment transport and history; native token accounting across approvals, the host compaction opt-out, and local usage reports without Claude requests. |
 | [`test/usage.test.mjs`](test/usage.test.mjs) | Cache/input mapping, unknown and zero values, repeated cumulative cost readings, persisted totals across reconnects, model changes, and session isolation. |
 | [`test/tools.test.mjs`](test/tools.test.mjs) | Before/after hooks, parallel calls, upstream MCP, Code Mode, errors, hidden tools, native host permission denial, forms, cancellation, image results, catalog refresh, and relay authentication/isolation. |
-| [`test/instructions.test.mjs`](test/instructions.test.mjs) | Root/nested `AGENTS.md` reads and same-turn scoped guidance, follow-up continuity, and exclusion of unrelated host system instructions. |
+| [`test/instructions.test.mjs`](test/instructions.test.mjs) | Opt-in host/custom-agent/late-plugin system instructions, agent switching without prompt replay, Plan write denial and Build writes, sessions without question, same-turn scoped guidance, and default native-mode behavior. |
 | [`test/workflow.test.mjs`](test/workflow.test.mjs) | Gated foreground CI wait across idle-timeout duration, publish/verification handoffs in one ACP prompt, failure handling, and changing DCP warnings. Fixture-driven; does not establish real-model instruction adherence or publish a GitHub release. |
 | [`test/prompt.test.mjs`](test/prompt.test.mjs) | Verified DCP-reminder/ID cleanup, preservation of user-authored warnings and unrelated guidance, and missing-source handling. |
 

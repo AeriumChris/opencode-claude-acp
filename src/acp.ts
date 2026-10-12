@@ -61,19 +61,24 @@ export class AcpConnection {
     });
   }
 
-  async start(savedID?: string, mcpServers: McpServer[] = []) {
-    // The bundled Claude adapter accepts a native system-prompt append through
-    // this ACP extension, preserving Claude's own preset and project guidance.
-    const meta = mcpServers.length ? { _meta: { systemPrompt: { append: [
+  async start(savedID?: string, mcpServers: McpServer[] = [], system?: string) {
+    // Use the final host instructions in OpenCode mode. Native mode appends
+    // integration guidance to Claude's own preset instead.
+    const integration = [
       'You are connected to OpenCode through ACP. The opencode MCP server exposes the tools available in this OpenCode session, including plugin and upstream MCP tools.',
-      'Prefer these tools for supported operations so OpenCode tool hooks and permissions apply. Native Claude tools remain available.',
+      system === undefined ? 'Prefer these tools for supported operations so OpenCode tool hooks and permissions apply. Native Claude tools remain available.'
+        : 'Use only the opencode MCP tools for actions, questions, planning, and delegation. OpenCode owns tool permissions and execution. Tool names in the host instructions refer to these MCP tools.',
       'For the opencode execute tool, use search({query, namespace}) inside its code to discover exact tool paths and signatures; search is synchronous.',
       'Only call paths returned by search, and await tool calls. Do not guess tool paths.',
       'Keep dependent work in the active turn. Native background-task callbacks are not delivered after the ACP turn ends. Use foreground shell calls (background: false); do not detach CI watchers or promise to resume from a native background notification.',
       'When asked to monitor a build and then publish a release, poll its status with bounded foreground calls and pauses until it finishes, handle failures, then complete the requested release and verify its published status before ending the turn. A successful build alone does not complete a release task.',
       'Before repository work, read the repository AGENTS.md if present. Before working in a subdirectory, also check for applicable AGENTS.md files along its path. Use the opencode read tool so it can return additional directory instructions.',
       'Follow AGENTS.md guidance within its directory scope; more specific directory guidance takes precedence. Re-read relevant guidance when asked or when it changes.',
-    ].join('\n') } } } : {};
+    ].join('\n');
+    const meta = system !== undefined ? { _meta: {
+      systemPrompt: [system, integration].filter(Boolean).join('\n\n'),
+      claudeCode: { options: { tools: [], strictMcpConfig: true, allowedTools: ['mcp__opencode__*'] } },
+    } } : mcpServers.length ? { _meta: { systemPrompt: { append: integration } } } : {};
     const timeout = setTimeout(() => this.close(), this.options.startupTimeoutMs ?? 30_000);
     timeout.unref();
     try {

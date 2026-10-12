@@ -21,7 +21,8 @@ export function createPlugin(options: Options = {}) {
     let choices: ModelChoice[] = [];
     let disposed = false;
     const checkpoints = new Checkpoints(ctx.storage);
-    const bridge = new Bridge(parseOptions({ ...ctx.options, ...options }), ctx.storage, (models) => {
+    const configured = parseOptions({ ...ctx.options, ...options });
+    const bridge = new Bridge(configured, ctx.storage, (models) => {
       if (!models.length || disposed) return;
       const merged = new Map(choices.map((model) => [model.id, model]));
       for (const model of models) merged.set(model.id, { ...merged.get(model.id), ...model });
@@ -88,7 +89,7 @@ export function createPlugin(options: Options = {}) {
       event.options.acpInstructionIDs = history.filter((message) => message.type === 'synthetic' &&
         message.metadata?.instruction !== undefined).map((message) => message.id);
       const question = event.tools.question;
-      if (!question) throw new Error('Claude ACP requires OpenCode’s built-in question tool for approvals. Enable it for this agent.');
+      if (!question && configured.integrationMode !== 'opencode') throw new Error('Claude ACP native mode requires OpenCode’s built-in question tool for approvals. Enable it for this agent.');
     }));
     registrations.push(await ctx.command.transform((editor) => editor.add({ name: 'claude-usage',
       description: 'Show recorded Claude ACP tokens, context capacity, and reported cost without calling Claude.',

@@ -93,7 +93,7 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
   await host.sessions.switchModel({ sessionID, model: { providerID: 'claude-acp', id: 'fixture-model' } });
   await host.sessions.prompt({ sessionID, text: 'named model restored' });
   await host.sessions.wait({ sessionID });
-  assert.equal((await logs()).filter((entry) => entry.method === 'session/set_config_option' && entry.params.configId === 'model').at(-1).params.value, 'fixture-model');
+  assert.equal((await logs()).filter((entry) => entry.effective).at(-1).effective.model, 'fixture-model', 'named model is restored even when changed host instructions reload the connection');
   await host.sessions.switchModel({ sessionID, model: { providerID: 'claude-acp', id: 'fixture-model', variant: 'high' } });
   await host.sessions.prompt({ sessionID, text: 'high again' });
   await host.sessions.wait({ sessionID });

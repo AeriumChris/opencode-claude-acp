@@ -34,6 +34,8 @@ test('approval summaries are bounded and omit payloads; only offered ACP IDs can
   assert.deepEqual(allowPermission(rejectOnly), { outcome: { outcome: 'cancelled' } });
   assert.equal(parseOptions({ permissionMode: 'allow' }).permissionMode, 'allow');
   assert.throws(() => parseOptions({ permissionMode: 'anything' }), /permissionMode/);
+  for (const integrationMode of ['opencode', 'native']) assert.equal(parseOptions({ integrationMode }).integrationMode, integrationMode);
+  assert.throws(() => parseOptions({ integrationMode: 'anything' }), /integrationMode/);
 });
 
 async function eventually(fn) {
