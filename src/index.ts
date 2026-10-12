@@ -37,7 +37,7 @@ export function createPlugin(options: Options = {}) {
     registrations.push(await ctx.provider.transform((editor) => {
       const models = [{ ...choices.find((item) => item.id === 'default'), id: 'default', name: 'Claude Code — default (ACP)' },
         ...choices.filter((item) => item.id !== 'default')];
-      editor.add({ info: { ...Provider.Info.empty(providerID), name: 'Claude Code (ACP)', activation: 'enabled',
+      editor.add({ info: { ...Provider.Info.empty(providerID), canonical: Provider.ID.anthropic, name: 'Claude Code (ACP)', activation: 'enabled',
         package: new URL('./provider.js', import.meta.url).href, settings: { instanceID } },
         models: models.map((item) => ({ ...Model.Info.default(providerID, Model.ID.make(item.id)), name: item.name,
           family: Model.Family.make(`claude-acp/${item.id}`), time: { released: catalogRegisteredAt },

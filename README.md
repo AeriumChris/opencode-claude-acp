@@ -6,7 +6,7 @@ This plugin connects OpenCode to the Claude Code CLI through the [Agent Client P
 
 **Provider:** `claude-acp` · **Display name:** Claude Code (ACP) · **Default model:** `claude-acp/default`
 
-**Compatibility:** built and tested with **OpenCode V2 2.0.15**, **Node.js 22+**, and the pinned Claude ACP adapter **0.81.1**. Live verification was performed on Windows with Node.js 24. This repository is private and installed from a local build; it is not published to npm.
+**Compatibility:** built and tested with **OpenCode V2 2.0.27**, **Node.js 22+**, and the pinned Claude ACP adapter **0.81.1**. Live verification was performed on Windows with Node.js 24. This repository is private and installed from a local build; it is not published to npm.
 
 ## Contents
 
@@ -53,7 +53,7 @@ Tool compatibility does not mean every OpenCode feature controls Claude's intern
 
 ## Requirements
 
-- **OpenCode V2**, with version 2.0.15 being the tested host version. V1 is not supported by this implementation.
+- **OpenCode V2**, with version 2.0.27 being the tested host version. V1 is not supported by this implementation. Keep the plugin's OpenCode and Effect dependencies aligned with the host; incompatible Effect exports can prevent the provider from loading.
 - **Node.js 22 or newer**, npm, and Git on the machine running the OpenCode server.
 - GitHub access to **[AeriumChris/opencode-claude-acp](https://github.com/AeriumChris/opencode-claude-acp)** while the repository is private.
 - A working Claude Code sign-in for the **same OS user that runs the server**.
@@ -264,6 +264,15 @@ These `run` commands send actual Claude requests. Use an interactive client for 
 5. Send a message, attach files, and answer any permission/question forms in the client.
 
 If the provider is hidden, refresh the client and check **Manage models**. Explicit hidden-model preferences take precedence over the plugin's defaults.
+
+### Newest models
+
+Claude Code decides which models ACP offers, so a newer CLI can list models that an older one cannot. At each adapter start, the plugin uses the newest installed Claude Code that is newer than the adapter's bundled CLI:
+
+- Claude desktop's managed copy (`%APPDATA%\Claude\claude-code\<version>`, including the Microsoft Store package's virtualized path, `~/Library/Application Support/Claude/claude-code/<version>` on macOS, or `~/.config/Claude/claude-code/<version>` on Linux).
+- The native installer (`~/.local/share/claude/versions/<version>`).
+
+When the desktop app or native installer updates Claude Code, new models appear after the next discovery; restart the OpenCode service to refresh the picker. If no newer install exists, the bundled CLI is used. To pin a specific binary, set `CLAUDE_CODE_EXECUTABLE` in the service environment or in the plugin's `env` option.
 
 ### Native tool activity
 
@@ -674,6 +683,7 @@ The tests use a protocol fixture through the **real OpenCode host and HTTP serve
 | [`test/tools.test.mjs`](test/tools.test.mjs) | Before/after hooks, parallel calls, upstream MCP, Code Mode, errors, hidden tools, native host permission denial, forms, cancellation, image results, catalog refresh, and relay authentication/isolation. |
 | [`test/instructions.test.mjs`](test/instructions.test.mjs) | Root/nested `AGENTS.md` reads and same-turn scoped guidance, follow-up continuity, and exclusion of unrelated host system instructions. |
 | [`test/workflow.test.mjs`](test/workflow.test.mjs) | Gated foreground CI wait across idle-timeout duration, publish/verification handoffs in one ACP prompt, failure handling, and changing DCP warnings. Fixture-driven; does not establish real-model instruction adherence or publish a GitHub release. |
+| [`test/claude-cli.test.mjs`](test/claude-cli.test.mjs) | Newest-install selection across desktop, Store, and native-installer layouts; bundled-version fallback. |
 | [`test/prompt.test.mjs`](test/prompt.test.mjs) | Verified DCP-reminder/ID cleanup, preservation of user-authored warnings and unrelated guidance, and missing-source handling. |
 
 The repository includes a [GitHub Actions workflow](.github/workflows/ci.yml) for Windows and Ubuntu with Node.js 24.
@@ -718,6 +728,7 @@ These checks have passed locally with the bundled adapter/CLI. They use temporar
 | [`src/prompt.ts`](src/prompt.ts) | Removal of verified generated message-ID suffixes. |
 | [`src/usage.ts`](src/usage.ts) | Usage validation, native token mapping, persisted observations, and local reports. |
 | [`src/options.ts`](src/options.ts) | Plugin option validation and adapter command selection. |
+| [`src/claude-cli.ts`](src/claude-cli.ts) | Selection of the newest installed Claude Code over the adapter's bundled CLI. |
 | [`src/queue.ts`](src/queue.ts), [`src/registry.ts`](src/registry.ts) | Event queue and per-plugin bridge lookup. |
 
 ### References and acknowledgements

@@ -179,7 +179,10 @@ test('real host checkpoints preserve pending prompts, attachments, restart conti
   simulateOldFailure = true;
   await host.sessions.prompt({ sessionID, text: 'Pending before old compaction failure.' });
   await host.sessions.wait({ sessionID }, { signal: AbortSignal.timeout(15_000) });
-  assert((await host.sessions.context({ sessionID })).some((m) => m.type === 'compaction' && m.status === 'running'), 'reproduce the old stuck automatic checkpoint');
+  // OpenCode 2.0.27 removes the unfinished checkpoint when its hook fails.
+  // Verify the failure occurred and recovery still delivers both pending users.
+  assert.equal(simulateOldFailure, false, 'automatic compaction reached the failing hook');
+  assert((await host.sessions.context({ sessionID })).some((m) => m.type === 'idle' && m.outcome === 'failed' && m.error?.message === 'Simulated old plugin compaction failure'), 'reproduce an automatic checkpoint failure');
   const beforeAuto = (await prompts()).length;
   await say(sessionID, 'Pending across automatic compaction.');
   assert.equal((await prompts()).length, beforeAuto + 1);
