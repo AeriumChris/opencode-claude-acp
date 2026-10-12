@@ -115,3 +115,9 @@ npm test
 ```
 
 Tests use a protocol fixture with the real OpenCode host and HTTP server; they do not call your Claude account.
+
+## AI use disclosure
+
+This project includes substantial AI-assisted code and documentation. **GPT-Astra (OpenAI's GPT-6 Astra), running through OpenCode**, was used to inspect the integration, research upstream documentation, implement and debug changes, write and run tests, and draft and revise the README and guide.
+
+The maintainer directed the work and provided feedback from actual use. Verification included builds, type checks, automated integration tests, and selected live Claude checks; these checks do not establish complete correctness or billing eligibility. AI assistance is disclosed here as part of the project's development process, not as an endorsement by OpenAI or Anthropic.
