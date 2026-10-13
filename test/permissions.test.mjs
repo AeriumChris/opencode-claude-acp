@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { OpenCode } from '@opencode/sdk';
 import { createPlugin } from '../dist/index.js';
-import { permissionSummary, permissionChoices, allowPermission } from '../dist/permissions.js';
+import { permissionSummary, permissionChoices, allowPermission, nativePermission } from '../dist/permissions.js';
 import { parseOptions } from '../dist/options.js';
 
 const options = [
@@ -32,6 +32,10 @@ test('approval summaries are bounded and omit payloads; only offered ACP IDs can
   const rejectOnly = { ...request, options: [options.at(-1)] };
   assert.deepEqual(permissionChoices(rejectOnly).map((choice) => choice.label), ['Deny']);
   assert.deepEqual(allowPermission(rejectOnly), { outcome: { outcome: 'cancelled' } });
+  const shell = nativePermission({ toolCall: { toolCallId: 'shell', kind: 'execute',
+    locations: [{ path: '/project' }], rawInput: { command: 'npm test' } } });
+  assert.deepEqual(shell.resources, ['npm test'], 'shell approval is scoped to the command, not its working directory');
+  assert.deepEqual(shell.save, ['npm test']);
   assert.equal(parseOptions({ permissionMode: 'allow' }).permissionMode, 'allow');
   assert.throws(() => parseOptions({ permissionMode: 'anything' }), /permissionMode/);
   for (const integrationMode of ['opencode', 'native']) assert.equal(parseOptions({ integrationMode }).integrationMode, integrationMode);
@@ -49,7 +53,11 @@ for (const permissionMode of ['ask', 'allow']) {
     const directory = await mkdtemp(join(process.env.OPENCODE_TEST_TMP ?? tmpdir(), 'acp-permissions-'));
     const log = join(directory, 'agent.jsonl');
     const host = await OpenCode.create({ database: { path: ':memory:' }, models: { fetch: false },
-      config: { directory, project: false, content: '{}' }, fs: { filewatcher: false, fff: false },
+      config: { directory, project: false, content: JSON.stringify({ permissions: [
+        { action: '*', resource: '*', effect: 'ask' },
+        { action: 'edit', resource: 'allowed.txt', effect: 'allow' },
+        { action: 'edit', resource: 'denied.txt', effect: 'deny' },
+      ] }) }, fs: { filewatcher: false, fff: false },
       plugins: [createPlugin({ permissionMode, command: process.execPath,
         args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log } })],
     });
@@ -61,29 +69,40 @@ for (const permissionMode of ['ask', 'allow']) {
     const sessionID = (await create()).id;
     const prompt = (requests) => host.sessions.prompt({ sessionID, text: `permission:${JSON.stringify(requests)}` });
     const wait = () => host.sessions.wait({ sessionID }, { signal: AbortSignal.timeout(15_000) });
-    const answer = async (label) => {
-      const form = await eventually(async () => (await host.session.form.list({ sessionID }))[0]);
-      await host.session.form.reply({ sessionID, formID: form.id, answer: { q0: label } });
-      return form;
+    const answer = async (decision) => {
+      const pending = await eventually(async () => {
+        const p = (await host.permission.list({ sessionID }))[0];
+        const s = await host.sessions.get({ sessionID });
+        if (s.outcome === 'failed') throw new Error(JSON.stringify(await host.sessions.context({ sessionID })));
+        return p;
+      });
+      assert.deepEqual(await host.session.form.list({ sessionID }), []);
+      await host.permission.reply({ sessionID, requestID: pending.id, decision });
+      return pending;
     };
     if (permissionMode === 'ask') {
+      for (const [path, expected] of [['allowed.txt', 'yes'], ['denied.txt', 'no']]) {
+        await prompt([{ toolCall: { toolCallId: path, kind: 'edit', rawInput: { path } } }]);
+        await wait();
+        assert.equal((await logs()).filter((entry) => entry.permissionResult).at(-1).permissionResult.outcome.optionId, expected);
+        assert.deepEqual(await host.permission.list({ sessionID }), [], 'host rules resolve without a prompt');
+        assert.deepEqual(await host.session.form.list({ sessionID }), []);
+      }
       await prompt([request]);
-      const form = await answer('Allow always (2)');
+      const form = await answer('once');
       assert.doesNotMatch(JSON.stringify(form), /FILE_CONTENT_MARKER/);
       assert.doesNotMatch(JSON.stringify(form), /Path:|Command:|File content:|Allow this operation\?/);
-      assert.match(JSON.stringify(form), /Always allow this command/);
       await wait();
-      assert.equal((await logs()).filter((entry) => entry.permissionResult).at(-1).permissionResult.outcome.optionId, 'rule');
+      assert.equal((await logs()).filter((entry) => entry.permissionResult).at(-1).permissionResult.outcome.optionId, 'yes');
 
       await prompt([{}]);
-      await answer('Allow always'); // Not offered for this request; free text must not grant it.
+      await answer('reject');
       await wait();
       assert.equal((await logs()).filter((entry) => entry.permissionResult).at(-1).permissionResult.outcome.optionId, 'no');
 
-      // An always choice is adapter-owned, not a bridge-wide auto-approval.
-      // Requests already queued when Allow all is selected must also be covered.
+      // OpenCode owns saved approvals; the adapter gets a one-operation grant.
       await prompt([{}, {}, {}]);
-      await answer('Allow all (session)');
+      await answer('always');
       await wait();
       assert.deepEqual((await logs()).filter((entry) => entry.permissionResult).slice(-3)
         .map((entry) => entry.permissionResult.outcome.optionId), ['yes', 'yes', 'yes']);
@@ -104,9 +123,9 @@ for (const permissionMode of ['ask', 'allow']) {
 
     if (permissionMode === 'ask') {
       const isolated = (await create()).id;
-      await host.sessions.prompt({ sessionID: isolated, text: 'permission isolated' });
-      const form = await eventually(async () => (await host.session.form.list({ sessionID: isolated }))[0]);
-      await host.session.form.reply({ sessionID: isolated, formID: form.id, answer: { q0: 'Deny' } });
+      await host.sessions.prompt({ sessionID: isolated, text: `permission:${JSON.stringify([{ toolCall: { toolCallId: 'different', title: 'Different operation', rawInput: { path: 'different.txt' } } }])}` });
+      const form = await eventually(async () => (await host.permission.list({ sessionID: isolated }))[0]);
+      await host.permission.reply({ sessionID: isolated, requestID: form.id, decision: 'reject' });
       await host.sessions.wait({ sessionID: isolated });
       assert.equal((await logs()).filter((entry) => entry.permissionResult).at(-1).permissionResult.outcome.optionId, 'no');
     }

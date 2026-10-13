@@ -1,6 +1,16 @@
 import type { RequestPermissionRequest, RequestPermissionResponse } from '@agentclientprotocol/sdk';
 
 export type Approval = { label: string; description: string; optionId?: string; allowAll?: boolean };
+/** Use native host actions so agent rules and the UI auto-approver apply. */
+export function nativePermission({ toolCall }: RequestPermissionRequest) {
+  const input = toolCall.rawInput && typeof toolCall.rawInput === 'object' ? toolCall.rawInput as Record<string, unknown> : {};
+  const action = ({ execute: 'shell', read: 'read', edit: 'edit', delete: 'edit', search: 'grep', fetch: 'webfetch' } as Record<string, string>)[toolCall.kind ?? ''] ?? 'claude_code';
+  const paths = toolCall.locations?.map((location) => location.path) ?? [];
+  const resource = action === 'shell' ? input.command : action === 'webfetch' ? input.url : input.file_path ?? input.path;
+  const resources = (action === 'shell' || action === 'webfetch') && typeof resource === 'string' ? [resource] :
+    paths.length ? paths : [typeof resource === 'string' ? resource : toolCall.title || toolCall.toolCallId];
+  return { action, resources, save: resources, metadata: { title: toolCall.title, claudeToolCallID: toolCall.toolCallId } };
+}
 const compact = (text: string, limit: number) => {
   const line = text.replace(/\s+/g, ' ').trim();
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;

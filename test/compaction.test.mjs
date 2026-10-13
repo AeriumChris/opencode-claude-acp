@@ -76,7 +76,7 @@ test('real host checkpoints preserve pending prompts, attachments, restart conti
   let host;
   const start = async (auto = false, noLoad = false) => {
     host = await OpenCode.create({ database: { path: database }, models: { fetch: false },
-      config: { directory, project: false, content: JSON.stringify({ compaction: { auto, tokens: 1 } }) },
+      config: { directory, project: false, content: JSON.stringify({ compaction: { auto, tokens: 1 }, permissions: [{ action: 'edit', resource: '*', effect: 'ask' }] }) },
       fs: { filewatcher: false, fff: false }, plugins: [createPlugin({ command: process.execPath,
         args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log, ...(auto ? { ACP_TEST_CONTEXT: '1000' } : {}), ...(noLoad ? { ACP_TEST_NO_LOAD: '1' } : {}) } }),
         Plugin.define({ id: 'test.checkpoint-observer', async setup(ctx) {
@@ -191,15 +191,15 @@ test('real host checkpoints preserve pending prompts, attachments, restart conti
     { type: 'text', text: 'Pending across automatic compaction.' },
   ]);
   assert((await host.sessions.context({ sessionID })).some((m) => m.type === 'compaction' && m.reason === 'auto' && m.status === 'completed'));
-  // Compact between a real ACP approval handoff and its resumed host step.
+  // Native approval after a checkpoint stays in the same provider step.
   await host.sessions.prompt({ sessionID, text: 'permission after checkpoint' });
-  const form = await eventually(async () => (await host.session.form.list({ sessionID }))[0], 'approval');
+  const form = await eventually(async () => (await host.permission.list({ sessionID }))[0], 'approval');
   const beforeApproval = (await prompts()).length;
   const beforeApprovalCompactions = compactions.length;
-  await host.session.form.reply({ sessionID, formID: form.id, answer: { q0: 'Allow once' } });
+  await host.permission.reply({ sessionID, requestID: form.id, decision: 'once' });
   await wait(sessionID);
   assert.equal((await prompts()).length, beforeApproval, 'approval resumes original native turn through compaction');
-  assert(compactions.length > beforeApprovalCompactions, 'host really compacted at the approval continuation');
+  assert.equal(compactions.length, beforeApprovalCompactions, 'approval needs no extra model step or checkpoint');
   assert.equal((await logs()).filter((e) => e.permissionResult).at(-1).permissionResult.outcome.optionId, 'yes');
 
   const question = { name: 'question', arguments: { questions: [{ header: 'Compaction test', question: 'Choose a value', options: [{ label: 'Blue', description: 'Blue' }] }] } };

@@ -141,7 +141,8 @@ export class Bridge {
     if (tool?.name === name) tool.started = true;
   }
 
-  async *stream(sessionID: string, directory: string, modelID: string, request: LLMRequest, signal: AbortSignal): AsyncIterable<LLMEvent> {
+  async *stream(sessionID: string, directory: string, modelID: string, request: LLMRequest, signal: AbortSignal,
+    authorize?: (request: RequestPermissionRequest) => Promise<boolean>): AsyncIterable<LLMEvent> {
     if (request.providerOptions?.acpUsageReport === true) {
       this.originalTexts.delete(sessionID);
       const id = randomUUID();
@@ -281,6 +282,13 @@ export class Bridge {
           yield* endBlock();
           const pending = packet.permission;
           yield* turn.nativeTools.update({ ...pending.request.toolCall, sessionUpdate: 'tool_call_update' });
+          if (authorize && !entry.allowAll && this.options.permissionMode !== 'allow') {
+            const allowed = await authorize(pending.request);
+            pending.resolve(allowed ? allowPermission(pending.request) : permissionResponse(
+              pending.request.options.find((option) => option.kind === 'reject_once')?.optionId));
+            turn.permissions.delete(pending.token);
+            continue;
+          }
           if (entry.allowAll || this.options.permissionMode === 'allow') {
             pending.resolve(allowPermission(pending.request));
             turn.permissions.delete(pending.token);

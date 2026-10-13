@@ -70,6 +70,7 @@ export function createPlugin(options: Options = {}) {
       bridge.rememberOriginalText(event.sessionID, originals);
       event.options.acpSessionID = event.sessionID;
       event.options.acpDirectory = session.location.directory;
+      event.options.acpAgent = event.agent;
       event.options.acpEffort = event.model.variant ?? 'default';
       const reportIDs: string[] = [];
       let reporting = false;
@@ -88,8 +89,6 @@ export function createPlugin(options: Options = {}) {
       // messages. Treat these as instructions, not new user turns.
       event.options.acpInstructionIDs = history.filter((message) => message.type === 'synthetic' &&
         message.metadata?.instruction !== undefined).map((message) => message.id);
-      const question = event.tools.question;
-      if (!question && configured.integrationMode !== 'opencode') throw new Error('Claude ACP native mode requires OpenCode’s built-in question tool for approvals. Enable it for this agent.');
     }));
     registrations.push(await ctx.command.transform((editor) => editor.add({ name: 'claude-usage',
       description: 'Show recorded Claude ACP tokens, context capacity, and reported cost without calling Claude.',

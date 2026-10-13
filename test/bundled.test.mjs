@@ -37,7 +37,10 @@ test('bundled host continues image checkpoints and reloads their archived histor
   const eventually = async (fn, description) => {
     const deadline = Date.now() + 30_000;
     do {
-      const value = await fn();
+      const value = await fn().catch((error) => {
+        if (error._tag === 'ServiceUnavailableError' && error.service === 'plugin') return false;
+        throw error;
+      });
       if (value) return value;
       if (server.exitCode !== null) throw new Error(`Server exited: ${output.slice(-2000)}`);
       await delay(100);
@@ -53,7 +56,7 @@ test('bundled host continues image checkpoints and reloads their archived histor
         XDG_CONFIG_HOME: join(directory, 'config'), XDG_DATA_HOME: join(directory, 'data'),
         XDG_STATE_HOME: join(directory, 'state'), XDG_CACHE_HOME: join(directory, 'cache'),
         OPENCODE_CONFIG_DIR: join(directory, 'config', 'opencode'), OPENCODE_DB: join(directory, 'host.db'),
-        OPENCODE_CONFIG_CONTENT: JSON.stringify({ compaction: { auto, tokens: 1 }, plugins: [
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({ permissions: [{ action: 'edit', resource: '*', effect: 'ask' }], compaction: { auto, tokens: 1 }, plugins: [
           { package: pathToFileURL(resolve('test/fixtures/plain-messages')).href }, {
           package: pathToFileURL(resolve('.')).href,
           options: { command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log, ...(auto ? { ACP_TEST_CONTEXT: '1000' } : {}) } },
@@ -85,6 +88,12 @@ test('bundled host continues image checkpoints and reloads their archived histor
   };
   const { id: sessionID } = await client.session.create({ location: { directory }, model: { providerID: 'claude-acp', id: 'fixture-model' } });
   const image = screenshot().toString('base64');
+  await client.session.prompt({ sessionID, text: 'permission bundled' });
+  const approval = await eventually(async () => (await client.permission.list({ sessionID }))[0], 'native permission in compiled host');
+  assert.deepEqual(await client.session.form.list({ sessionID }), []);
+  await client.permission.reply({ sessionID, requestID: approval.id, decision: 'once' });
+  await client.session.wait({ sessionID }, { signal: AbortSignal.timeout(30_000) });
+  assert.equal((await logs()).filter((entry) => entry.permissionResult).at(-1).permissionResult.outcome.optionId, 'yes');
   await say(sessionID, 'Keep the screenshot.', [{ uri: `data:image/png;base64,${image}`, name: 'screen.png' }]);
   assert((JSON.parse(await readFile(join(directory, 'plain-hook.json'), 'utf8'))).count > 0, 'the prior context hook ran');
   const nativeID = (await prompts()).at(-1).params.sessionId;

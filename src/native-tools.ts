@@ -2,7 +2,31 @@ import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import { LLMEvent } from '@opencode/ai';
 
 type Update = Extract<SessionUpdate, { sessionUpdate: 'tool_call' | 'tool_call_update' }>;
-type Activity = { update: Update; segment: number; phase?: 'input' | 'running'; done?: boolean };
+type Activity = { update: Update; name: string; segment: number; phase?: 'input' | 'running'; done?: boolean };
+
+const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+/** Match OpenCode's built-in renderers without scheduling a host tool execution. */
+export function nativeToolName(update: Pick<Update, 'kind' | 'title' | 'rawInput'>): string {
+  const input = record(update.rawInput);
+  if (update.kind === 'execute') return 'shell';
+  if (update.kind === 'read') return 'read';
+  if (update.kind === 'edit') return 'content' in input && !('old_string' in input) ? 'write' : 'edit';
+  if (update.kind === 'search') return /^glob\b/i.test(update.title ?? '') || 'glob' in input ? 'glob' : 'grep';
+  if (update.kind === 'fetch') return 'webfetch';
+  return 'claude_code';
+}
+
+function output(update: Update): unknown {
+  const blocks = update.content?.flatMap((part) => part.type === 'content' && part.content.type === 'text' ? [part.content.text] : []);
+  if (blocks?.length) return blocks.join('\n');
+  const raw = update.rawOutput;
+  if (typeof raw === 'string') return raw;
+  const fields = record(raw);
+  const text = ['stdout', 'stderr'].flatMap((key) => typeof fields[key] === 'string' && fields[key] ? [fields[key]] : []);
+  if (text.length) return text.join('\n');
+  return raw ?? update.content ?? update.status ?? '';
+}
 
 /** ACP deltas belong to a native turn, which can span several host model steps. */
 export class NativeTools {
@@ -12,7 +36,7 @@ export class NativeTools {
     let tool = this.tools.get(update.toolCallId);
     if (tool?.done) return;
     if (!tool) {
-      tool = { update, segment: 0 };
+      tool = { update, name: nativeToolName(update), segment: 0 };
       this.tools.set(update.toolCallId, tool);
     } else {
       // Optional/null ACP update fields mean unchanged, not erased.
@@ -22,7 +46,7 @@ export class NativeTools {
     const status = tool.update.status;
     if (status === 'in_progress' || status === 'completed' || status === 'failed') yield* this.call(tool);
     if (status === 'completed' || status === 'failed') {
-      yield this.result(tool, status === 'failed' ? 'error' : 'json', tool.update.rawOutput ?? tool.update.content ?? status);
+      yield this.result(tool, status === 'failed' ? 'error' : 'json', output(tool.update));
       tool.done = true;
       tool.phase = undefined;
     }
@@ -64,25 +88,28 @@ export class NativeTools {
   private *open(tool: Activity): Iterable<LLMEvent> {
     if (tool.phase) return;
     tool.phase = 'input';
-    yield LLMEvent.toolInputStart({ id: this.id(tool), name: 'claude_code', providerExecuted: true });
-    yield LLMEvent.toolInputDelta({ id: this.id(tool), name: 'claude_code', text: JSON.stringify(this.input(tool)) });
-    yield LLMEvent.toolInputEnd({ id: this.id(tool), name: 'claude_code' });
+    yield LLMEvent.toolInputStart({ id: this.id(tool), name: tool.name, providerExecuted: true });
+    yield LLMEvent.toolInputDelta({ id: this.id(tool), name: tool.name, text: JSON.stringify(this.input(tool)) });
+    yield LLMEvent.toolInputEnd({ id: this.id(tool), name: tool.name });
   }
 
   private *call(tool: Activity): Iterable<LLMEvent> {
     if (tool.phase === 'running') return;
     yield* this.open(tool);
     tool.phase = 'running';
-    yield LLMEvent.toolCall({ id: this.id(tool), name: 'claude_code', providerExecuted: true,
+    yield LLMEvent.toolCall({ id: this.id(tool), name: tool.name, providerExecuted: true,
       input: this.input(tool) });
   }
 
   private input(tool: Activity) {
-    return { title: tool.update.title?.trim() || 'Claude Code operation',
-      ...(tool.update.rawInput != null ? { input: tool.update.rawInput } : {}) };
+    const input = record(tool.update.rawInput);
+    const path = input.file_path ?? input.path ?? tool.update.locations?.[0]?.path;
+    return { ...input, title: tool.update.title?.trim() || 'Claude Code operation',
+      ...(typeof path === 'string' ? { path } : {}),
+      ...(tool.name === 'shell' && typeof input.command !== 'string' ? { command: tool.update.title ?? '' } : {}) };
   }
 
   private result(tool: Activity, type: 'json' | 'error', value: unknown) {
-    return LLMEvent.toolResult({ id: this.id(tool), name: 'claude_code', providerExecuted: true, result: { type, value } });
+    return LLMEvent.toolResult({ id: this.id(tool), name: tool.name, providerExecuted: true, result: { type, value } });
   }
 }

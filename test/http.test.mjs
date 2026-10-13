@@ -20,7 +20,7 @@ test('HTTP clients share the provider catalog, session output, and approval form
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
       const server = yield* ServerProcess.start({ hostname: '127.0.0.1', port: 0, password,
         database: { path: ':memory:' }, models: { fetch: false }, fs: { filewatcher: false, fff: false },
-        config: { directory, project: false, content: JSON.stringify({ plugins: [{
+        config: { directory, project: false, content: JSON.stringify({ permissions: [{ action: 'edit', resource: '*', effect: 'ask' }], plugins: [{
           package: pathToFileURL(resolve('.')).href,
           options: { command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log, ACP_TEST_USAGE: '1' } },
         }] }) },
@@ -46,13 +46,14 @@ test('HTTP clients share the provider catalog, session output, and approval form
         await first.session.prompt({ sessionID, text: 'permission HTTP client' });
         let form;
         for (let n = 0; n < 100; n++) {
-          [form] = await second.session.form.list({ sessionID });
+          [form] = await second.permission.list({ sessionID });
           if (form) break;
           await delay(100);
         }
         assert(form, 'a second client sees the pending ACP approval');
-        assert.match(JSON.stringify(form), /Claude ACP approval/);
-        await second.session.form.reply({ sessionID, formID: form.id, answer: { q0: 'Allow once' } });
+        assert.equal(form.action, 'edit');
+        assert.deepEqual(await second.session.form.list({ sessionID }), []);
+        await second.permission.reply({ sessionID, requestID: form.id, decision: 'once' });
         await first.session.wait({ sessionID });
         const context = await second.session.context({ sessionID });
         assert.match(JSON.stringify(context), /Approved operation completed/);

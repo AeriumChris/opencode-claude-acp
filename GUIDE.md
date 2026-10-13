@@ -43,14 +43,14 @@ The default **native integration mode** preserves Claude Code's own instructions
 | **Model selection** | A Claude Code (ACP) provider in OpenCode's model picker. Available model IDs and names come from Claude, rather than a hardcoded list. |
 | **Effort selection** | Each model advertises its supported effort variants. Changes apply to the next new prompt; Default clears the explicit override. |
 | **Shared clients** | The TUI, desktop app, and web use the server's provider catalog, conversation output, and approval forms. |
-| **Streaming** | Text and available thought chunks stream into the conversation. Native tools appear as `claude_code` activity when announced, then show running and completed/failed states with readable titles. |
+| **Streaming** | Text and available thought chunks stream into the conversation. Native shell, read, edit, write, search, and fetch operations use OpenCode's built-in tool cards with readable output. Unknown operations use a generic activity card. |
 | **Screenshots and files** | PNG, JPEG, GIF, and WebP images reach Claude as image data. OpenCode-resolved text/source attachments and directory listings are supported. |
 | **Repository access** | Claude can read, search, edit, and run commands in the server-side project, subject to tool permissions and OS access. |
 | **Repository guidance** | Claude is instructed to read root and applicable nested `AGENTS.md` files. Scoped guidance discovered by OpenCode's read tool reaches the same Claude turn. Native `CLAUDE.md` support remains available. |
 | **OpenCode plugin tools** | Tools are exposed to Claude through a session-specific MCP relay and executed by OpenCode, including before/after tool hooks. |
 | **Agent integration** | Optional `integrationMode: "opencode"` forwards Build, Plan, Orchestrator, and custom-agent system instructions and uses host-only tools. The default preserves Claude's native preset and tools. |
 | **Existing MCP connections** | Claude can use available OpenCode MCP tools, including Code Mode discovery/execution. Upstream authentication stays in OpenCode. |
-| **Approvals and questions** | Compact ACP approval forms offer one-time approval, adapter-provided persistent choices, and **Allow all (session)**. Set `permissionMode: "allow"` for automatic ACP approval across sessions. Relayed tools retain OpenCode's own permissions and forms. |
+| **Approvals and questions** | ACP approvals use OpenCode's permission rules and standard permission panel, including its **Auto-accept permissions** setting. Ordinary questions remain interactive. |
 | **Conversation continuity** | Follow-ups reuse the native Claude session. Saved sessions reload after idle shutdown; history bootstrap preserves prior text and images. |
 | **DCP compatibility** | Verified host-added message-ID suffixes and compression nudges are removed without changing your original text. |
 | **Cancellation** | Stop interrupts the active ACP turn and relayed work. Automatic model retries are disabled to avoid replaying agent actions. |
@@ -65,7 +65,6 @@ Claude still manages its internal conversation and model requests. See [plugin c
 - **Node.js 22 or newer**, npm, and Git on the machine running the OpenCode server.
 - A checkout of **[AeriumChris/opencode-claude-acp](https://github.com/AeriumChris/opencode-claude-acp)** on the server machine.
 - A working Claude Code sign-in for the **same OS user that runs the server**.
-- In the default **native integration mode**, OpenCode's built-in `question` tool enabled for ACP approvals.
 
 The adapter includes a Claude CLI, so a separate global `claude` installation is optional. OpenCode's Anthropic API-key provider and this ACP provider have separate authentication paths.
 
@@ -292,7 +291,7 @@ After Claude updates, finish active work and [restart the OpenCode service](#upd
 
 Native tools appear as soon as ACP announces them, including while their inputs are being prepared. An ACP `in_progress` update changes the entry to running; completion or failure settles it. Titles and inputs are retained across sparse updates, so a final result does not replace a readable operation title with a `toolu_…` identifier.
 
-When an approval or relayed OpenCode tool takes over, the current display entry ends with an explicit **paused** result. A new entry continues the same native operation when control returns to Claude. The paused result is a handoff marker, not evidence that the underlying operation finished. This accommodates OpenCode's per-step tool lifecycle.
+Native permission requests keep the current tool card running until the decision and result arrive. When a relayed OpenCode tool takes over, the current display entry ends with an explicit **paused** result. A new entry continues the same native operation when control returns to Claude. This accommodates OpenCode's per-step tool lifecycle; a paused result does not mean the operation finished.
 
 The display reflects activity reported by ACP. Available thought chunks continue streaming, but command-output streaming and live title changes after an entry starts running depend on host/adapter support.
 
@@ -408,20 +407,14 @@ Opt-in OpenCode mode uses the first tool path only. Default native mode enables 
 1. **Relayed OpenCode tools:** OpenCode executes the operation with its existing tool behavior, permission checks, and hooks.
 2. **Native Claude tools:** Claude Code executes the operation with its own configuration and permissions. OpenCode tool hooks do not intercept it.
 
-In OpenCode mode the relay is preapproved on the Claude side; OpenCode still checks each host operation. If the adapter asks for a separate ACP permission (normally in native mode), the plugin displays an OpenCode **question form** containing only the operation title, followed by the approval choices. For example:
+ACP permission requests use OpenCode's permission service. Its configured agent rules, saved approvals, and permission hooks determine whether an operation is allowed, denied, or needs the standard permission panel. File bodies and edit payloads are omitted from requests; resources identify the path, command, or URL being approved.
 
-```text
-Claude Code requests permission: Write frontend\widgets\AeriumFriendsPanel.cpp
-```
+- **Auto-accept permissions** in OpenCode settings automatically answers these requests, just like native-provider requests. ACP approvals are no longer question forms.
+- **Allow once** grants the pending operation.
+- **Always** saves approval for the displayed resources in OpenCode. Claude receives a one-operation grant where available, so OpenCode keeps control of later approvals.
+- **Reject** or cancellation does not grant permission. A configured deny rule rejects the operation without prompting.
 
-The title is limited to 160 characters and normalized to one line. Raw input, file bodies, edit payloads, extra path/command summaries, and follow-up question text are omitted.
-
-- **Deny:** reject this operation.
-- **Allow once:** approve this operation, when offered by the adapter.
-- **Allow always:** use the adapter's persistent approval choice, when offered. Read its description for the exact scope (for example, edits in the session or commands matching a rule). Multiple adapter choices appear as **Allow always**, **Allow always (2)**, etc.
-- **Allow all (session):** approve this and all subsequent ACP permission requests in this OpenCode session, including requests already queued and future turns. This choice is saved across connection/server restarts. It does not apply to other sessions; starting a new session or resetting the bridge by changing provider, directory, or prior history clears that scope.
-
-Only an exact offered choice recorded by the host grants approval. Dismissal, interruption, or an unexpected custom answer does not approve it.
+Ordinary questions asking for information or decisions still require an answer. In OpenCode integration mode the relay is preapproved on the Claude side; OpenCode still checks each host operation.
 
 To automatically approve **all ACP permission requests across sessions**, add `permissionMode` to this plugin's existing options in `opencode.json(c)`:
 
@@ -438,11 +431,11 @@ To automatically approve **all ACP permission requests across sessions**, add `p
 }
 ```
 
-Preserve any other plugin options and entries, then restart the OpenCode service. The default is `"ask"`. To restore prompting, change it back to `"ask"` and start a new session if you previously selected **Allow all (session)**.
+Preserve any other plugin options and entries, then restart the OpenCode service. The default is `"ask"`, which delegates to OpenCode's permission system. Prefer OpenCode's Auto-accept setting for consistent behavior across providers. Existing legacy **Allow all (session)** grants remain valid for their saved sessions.
 
 These settings cover ACP approvals. Relayed OpenCode tools still use OpenCode's own permission rules. To also allow those tools by default, add `{ "action": "*", "resource": "*", "effect": "allow" }` to the top-level `permissions` array; later agent rules and policies can still restrict them. Ordinary questions asking for information or decisions still require an answer.
 
-Keep the built-in `question` tool enabled in native mode. The tested OpenCode plugin API cannot directly create native permission requests, so the bridge uses this shared question UI. In native mode, a relayed call can require both an ACP approval and the host tool's own permission/form. Operations already permitted by Claude's native settings may not ask an ACP question.
+ACP approvals do not require the `question` tool. In native mode, a relayed call can require both an ACP approval and the host tool's own permission/form. Operations already permitted by Claude's native settings do not emit an ACP request and therefore do not pass through this approval bridge.
 
 Use **Stop** to interrupt a turn. Cancellation closes pending relay work and interrupts Claude; individual tool implementations must cooperate with cancellation to stop their underlying operation. Completed side effects are not rolled back.
 
@@ -611,10 +604,10 @@ Remove only this plugin's entry from the relevant `plugins` array, then restart 
 | Login works in a terminal but not in OpenCode | Confirm the server runs as the same OS user and uses the intended Claude executable/environment. |
 | Plugin/MCP tool missing | Check the session's available tools and upstream MCP connection/sign-in in OpenCode. Catalog changes apply on a subsequent user turn; try a new session after configuration changes. |
 | RTK does not affect a command | Check whether Claude used a native tool or a relayed OpenCode shell tool. Only the latter passes through the OpenCode RTK hook. |
-| Approval fails or no form appears | Keep `question` enabled. A host deny rule can reject a relayed tool, and Claude settings can already allow a native action. |
-| Huge approval text hides the buttons | Update and rebuild the checkout referenced by the plugin's `package` path in `opencode.json(c)`, then restart the service and retry the operation. Updating a different clone does not update the installed plugin. Current prompts contain only a bounded operation title; existing forms retain their original text. |
-| Repeated ACP approval questions | Choose **Allow always** for an adapter-provided rule, **Allow all (session)** for the current session, or set `options.permissionMode` to `"allow"` across sessions. See [Permissions and cancellation](#permissions-and-cancellation). |
-| Still prompted after enabling automatic ACP approval | Check whether the prompt is an OpenCode tool permission or an ordinary question. These have separate behavior from ACP approvals. |
+| Approval fails or no panel appears | Check OpenCode's permission rules and Auto-accept setting. Claude settings can also already allow a native action. |
+| Old generic cards or approval questions | Rebuild the checkout referenced by the plugin's `package` path, then restart the service. Existing transcript entries retain their original representation. |
+| Repeated ACP permission prompts | Enable **Auto-accept permissions** or use **Always** for the displayed resources. See [Permissions and cancellation](#permissions-and-cancellation). |
+| Still prompted with Auto-accept enabled | Ordinary questions still require answers. Ensure the updated plugin is loaded and the client with Auto-accept enabled is connected. |
 | Plan agent still permits native edits | Default native mode leaves Claude-native tools outside host tool permissions. Opt-in `integrationMode: "opencode"` uses host-only tools; see the billing caveat above before enabling it. |
 | HTTP 400: third-party apps draw from extra usage | If using OpenCode mode, restore `integrationMode: "native"` and reload the plugin. If it persists, contact Anthropic with the error and its current SDK plan guidance; adding paid credits is not a required plugin setup step. |
 | Stuck showing Compacting after a failed turn | Older versions threw during host compaction. Update/rebuild the configured plugin checkout, restart the matching service, and retry. Current versions complete local checkpoints; see [Context compaction](#context-compaction). |
@@ -729,7 +722,7 @@ The tests use a protocol fixture through the **real OpenCode host and HTTP serve
 | [`test/compaction.test.mjs`](test/compaction.test.mjs) | Manual/automatic checkpoints, exactly-once pending prompts, real service-host reopen, attachments, forks/reverts, provider switching and summarization, approval/relay continuations, adapters without native loading, missing/circular archives, and separate image-class identities. |
 | [`test/bundled.test.mjs`](test/bundled.test.mjs) | Opt-in release-executable integration: silent-body image checkpoints, restart/fork recovery, no automatic checkpoint during tool handoff, and DCP-style plain-object context edits. Uses an isolated server and fixture ACP process. |
 | [`test/host.test.mjs`](test/host.test.mjs) | Model discovery/visibility metadata, model-specific effort, switching/default reset, streaming, continuity, approval/denial/dismissal, cancellation, native reload/isolation, and DCP marker handling. |
-| [`test/permissions.test.mjs`](test/permissions.test.mjs) | Bounded approval summaries, omitted file bodies, adapter-specific persistent choice IDs, rejection of unoffered choices, queued/session-wide approvals, reconnect persistence, session isolation, and automatic approval configuration. |
+| [`test/permissions.test.mjs`](test/permissions.test.mjs) | Omitted file bodies, host allow/deny rules, native permission replies, saved resource approvals, queued requests, reconnect persistence, and explicit automatic approval configuration. |
 | [`test/http.test.mjs`](test/http.test.mjs) | Loading the configured local plugin directory; shared model/session/approval APIs across two clients; image/text attachment transport and history; native token accounting across approvals, the host compaction opt-out, and local usage reports without Claude requests. |
 | [`test/usage.test.mjs`](test/usage.test.mjs) | Cache/input mapping, unknown and zero values, repeated cumulative cost readings, persisted totals across reconnects, model changes, and session isolation. |
 | [`test/tools.test.mjs`](test/tools.test.mjs) | Before/after hooks, parallel calls, upstream MCP, Code Mode, errors, hidden tools, native host permission denial, forms, cancellation, image results, catalog refresh, and relay authentication/isolation. |

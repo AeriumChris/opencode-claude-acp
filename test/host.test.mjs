@@ -19,7 +19,7 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
   const log = join(directory, 'agent.jsonl');
   let markerIndex = 0;
   const host = await OpenCode.create({ database: { path: ':memory:' }, models: { fetch: false },
-    config: { directory, project: false, content: '{"model":"claude-acp/fixture-model"}' }, fs: { filewatcher: false, fff: false },
+    config: { directory, project: false, content: JSON.stringify({ model: 'claude-acp/fixture-model', permissions: [{ action: '*', resource: '*', effect: 'ask' }] }) }, fs: { filewatcher: false, fff: false },
     plugins: [createPlugin({ command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log } }),
       // Run after the ACP hook, as another plugin can. Renumber markers between
       // requests to ensure host bookkeeping never invalidates the native cursor.
@@ -102,12 +102,12 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
   await host.sessions.wait({ sessionID });
   assert.equal((await logs()).filter((entry) => entry.effective).at(-1).effective.effort, 'default', 'clearing the variant clears the native effort pin');
   await host.sessions.switchModel({ sessionID, model: { providerID: 'claude-acp', id: 'fixture-model', variant: 'medium' } });
-  for (const [answer, expected] of [['Allow once', 'yes'], ['Deny', 'no'], ['custom unexpected text', 'no']]) {
+  for (const [answer, expected] of [['once', 'yes'], ['reject', 'no']]) {
     await host.sessions.prompt({ sessionID, text: `permission ${answer}` });
-    const form = await eventually(async () => (await host.session.form.list({ sessionID }))[0], 'native approval question');
-    assert.match(JSON.stringify(form), /Claude ACP approval/);
+    const form = await eventually(async () => (await host.permission.list({ sessionID }))[0], 'native approval');
+    assert.deepEqual(await host.session.form.list({ sessionID }), []);
     const count = (await logs()).filter((entry) => entry.method === 'session/prompt').length;
-    await host.session.form.reply({ sessionID, formID: form.id, answer: { q0: answer } });
+    await host.permission.reply({ sessionID, requestID: form.id, decision: answer });
     await host.sessions.wait({ sessionID }, { signal: AbortSignal.timeout(10_000) }).catch(async (error) => {
       console.error(JSON.stringify({ logs: await logs(), context: await host.sessions.context({ sessionID }), forms: await host.session.form.list({ sessionID }) }, null, 2));
       throw error;
@@ -117,13 +117,13 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
     assert.equal(entries.filter((entry) => entry.permissionResult).at(-1).permissionResult.outcome.optionId, expected);
   }
   await host.sessions.prompt({ sessionID, text: 'permission dismiss' });
-  const dismissed = await eventually(async () => (await host.session.form.list({ sessionID }))[0], 'dismissible approval');
-  await host.session.form.cancel({ sessionID, formID: dismissed.id });
+  const dismissed = await eventually(async () => (await host.permission.list({ sessionID }))[0], 'dismissible approval');
+  await host.permission.reply({ sessionID, requestID: dismissed.id, decision: 'reject' });
   await host.sessions.wait({ sessionID });
   assert.notEqual((await logs()).filter((entry) => entry.permissionResult).at(-1).permissionResult.outcome.optionId, 'yes');
 
   await host.sessions.prompt({ sessionID, text: 'permission interrupt' });
-  await eventually(async () => (await host.session.form.list({ sessionID }))[0], 'approval before interrupt');
+  await eventually(async () => (await host.permission.list({ sessionID }))[0], 'approval before interrupt');
   await host.sessions.interrupt({ sessionID });
   await host.sessions.wait({ sessionID });
   await eventually(async () => (await logs()).filter((entry) => entry.permissionResult).at(-1)?.permissionResult.outcome.outcome === 'cancelled', 'pending ACP permission cancelled');

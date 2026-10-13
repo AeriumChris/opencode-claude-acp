@@ -59,13 +59,13 @@ async function handle(message) {
     if (text.startsWith('activity:')) {
       const { gate, mode = 'complete' } = JSON.parse(text.slice(9));
       const toolCallId = 'activity-build';
-      update({ sessionUpdate: 'tool_call', toolCallId, title: 'Build', status: 'pending', rawInput: {} });
+      update({ sessionUpdate: 'tool_call', toolCallId, title: 'Build', kind: 'execute', status: 'pending', rawInput: {} });
       while (prompts.has(id) && !existsSync(`${gate}.input`)) await delay(20);
       if (!prompts.has(id)) return;
       // Real adapters refine streamed input, then send sparse status/output deltas.
       update({ sessionUpdate: 'tool_call_update', toolCallId, title: 'Build desktop tests', rawInput: { command: 'cmake --build fixture' } });
       update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress' });
-      update({ sessionUpdate: 'tool_call_update', toolCallId: 'activity-check', title: 'Check fixture', status: 'in_progress' });
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'activity-check', title: 'Check fixture', kind: 'read', locations: [{ path: 'fixture.txt' }], status: 'in_progress' });
       while (prompts.has(id) && !existsSync(gate)) await delay(20);
       if (!prompts.has(id)) return;
       if (mode === 'permission') {

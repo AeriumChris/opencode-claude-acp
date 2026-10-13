@@ -16,7 +16,7 @@ async function eventually(fn, description) {
 test('native tool activity is visible before completion, survives host handoffs, and settles on cancellation', { timeout: 90_000 }, async (t) => {
   const directory = await mkdtemp(join(process.env.OPENCODE_TEST_TMP ?? tmpdir(), 'acp-activity-'));
   const host = await OpenCode.create({ database: { path: ':memory:' }, models: { fetch: false },
-    config: { directory, project: false, content: '{}' }, fs: { filewatcher: false, fff: false },
+    config: { directory, project: false, content: JSON.stringify({ permissions: [{ action: '*', resource: '*', effect: 'ask' }] }) }, fs: { filewatcher: false, fff: false },
     plugins: [createPlugin({ command: process.execPath, args: [resolve('test/fixtures/agent.mjs')] })],
   });
   t.after(async () => { await host.close(); await delay(600); await rm(directory, { recursive: true, force: true }); });
@@ -42,24 +42,27 @@ test('native tool activity is visible before completion, survives host handoffs,
     });
     const build = running.find((part) => part.id === 'claude_activity-build');
     assert.equal(build.state.input.title, 'Build desktop tests');
-    assert.equal(build.state.input.input.command, 'cmake --build fixture');
+    assert.equal(build.name, 'shell');
+    assert.equal(build.state.input.command, 'cmake --build fixture');
+    const read = running.find((part) => part.id === 'claude_activity-check');
+    assert.equal(read.name, 'read');
+    assert.equal(read.state.input.path, 'fixture.txt');
     assert.match(JSON.stringify(await context()), /Fixture thinking\./);
     if (mode === 'cancel') await host.sessions.interrupt({ sessionID });
     else {
       await writeFile(gate, 'release');
       if (mode === 'permission') {
-        const form = await eventually(async () => (await host.session.form.list({ sessionID }))[0], 'approval handoff');
-        const paused = await tools();
-        assert.match(JSON.stringify(paused), /Native operation has not finished/);
-        assert(!JSON.stringify(paused).includes('missing tool result'));
-        await host.session.form.reply({ sessionID, formID: form.id, answer: { q0: 'Allow once' } });
+        const request = await eventually(async () => (await host.permission.list({ sessionID }))[0], 'native permission');
+        assert.deepEqual(await host.session.form.list({ sessionID }), []);
+        assert.equal((await tools()).filter((part) => part.state.status === 'running').length, 2);
+        await host.permission.reply({ sessionID, requestID: request.id, decision: 'once' });
       }
     }
     await host.sessions.wait({ sessionID }, { signal: AbortSignal.timeout(15_000) });
     const finished = await tools();
     assert(finished.every((part) => ['completed', 'error'].includes(part.state.status)), `${mode}: no stranded native tools`);
     const builds = finished.filter((part) => part.id.startsWith('claude_activity-build'));
-    assert.equal(builds.length, mode === 'permission' ? 2 : 1, 'one display segment per host step, no duplicate completion');
+    assert.equal(builds.length, 1, 'permission replies do not duplicate native activity');
     assert(builds.every((part) => part.state.input.title === 'Build desktop tests'));
     if (mode === 'cancel' || mode === 'missing') assert.equal(builds.at(-1).state.status, 'error');
     else {
