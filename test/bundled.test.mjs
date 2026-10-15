@@ -13,11 +13,12 @@ import { screenshot } from './fixtures/image.mjs';
 
 // Opt in with the actual release executable: SDK tests share the plugin's modules
 // and cannot establish compatibility with a compiled host's class identities.
-test('bundled host continues image checkpoints and reloads their archived history', {
+test('bundled host signs in cold, continues image checkpoints, and reloads archived history', {
   skip: !process.env.OPENCODE_TEST_EXECUTABLE, timeout: 120_000,
 }, async (t) => {
   const directory = await mkdtemp(join(process.env.OPENCODE_TEST_TMP ?? tmpdir(), 'acp-bundled-'));
   const log = join(directory, 'agent.jsonl');
+  const gate = join(directory, 'signed-in');
   const probe = createServer().listen(0, '127.0.0.1');
   await once(probe, 'listening');
   const port = probe.address().port;
@@ -59,7 +60,7 @@ test('bundled host continues image checkpoints and reloads their archived histor
         OPENCODE_CONFIG_CONTENT: JSON.stringify({ permissions: [{ action: 'edit', resource: '*', effect: 'ask' }], compaction: { auto, tokens: 1 }, plugins: [
           { package: pathToFileURL(resolve('test/fixtures/plain-messages')).href }, {
           package: pathToFileURL(resolve('.')).href,
-          options: { command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log, ...(auto ? { ACP_TEST_CONTEXT: '1000' } : {}) } },
+          options: { command: process.execPath, args: [resolve('test/fixtures/agent.mjs')], env: { ACP_TEST_LOG: log, ACP_TEST_AUTH_GATE: gate, ...(auto ? { ACP_TEST_CONTEXT: '1000' } : {}) } },
         }] }),
       }, stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -72,10 +73,28 @@ test('bundled host continues image checkpoints and reloads their archived histor
     const headers = () => ({ authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` });
     await eventually(async () => password && fetch(`${baseUrl}/api/info`, { headers: headers() }).then((r) => r.ok).catch(() => false), 'private server startup');
     const client = OpenCode.make({ baseUrl, headers: headers() });
-    await eventually(async () => (await client.model.list({ location: { directory } })).data.some((m) => m.providerID === 'claude-acp' && m.id === 'fixture-model'), 'fixture model discovery');
+    await eventually(async () => (await client.command.list({ location: { directory } })).data.some((c) => c.name === 'claude-login'), 'plugin login command registration');
+    if (auto) await eventually(async () => (await client.model.list({ location: { directory } })).data.some((m) => m.providerID === 'claude-acp' && m.id === 'fixture-model'), 'fixture model discovery after restart');
     return client;
   };
   let client = await start();
+  assert(!(await client.model.list({ location: { directory } })).data.some((m) => m.providerID === 'claude-acp'), 'cold login needs no discovered model');
+  const loginSession = await client.session.create({ location: { directory } });
+  await client.session.command({ sessionID: loginSession.id, name: 'claude-login', text: '' });
+  const loginForm = async (title) => {
+    const form = await eventually(async () => (await client.session.form.list({ sessionID: loginSession.id })).find((f) => f.title === title), title);
+    assert.equal(form.metadata.kind, 'question');
+    assert(form.fields.every((field) => field.type === 'string' || field.type === 'multiselect'));
+    return form;
+  };
+  const replyLogin = (form, answer) => client.session.form.reply({ sessionID: loginSession.id, formID: form.id, answer });
+  await replyLogin(await loginForm('Claude Code sign-in required'), { action: 'authenticate' });
+  const authorize = await loginForm('Authenticate with Claude');
+  assert.equal(authorize.fields[0].key, 'code');
+  assert(authorize.fields[0].description.includes('https://claude.ai/oauth/authorize?state=fixture&code_challenge=fixture'));
+  await replyLogin(authorize, { code: 'fixture-code' });
+  await replyLogin(await loginForm('Claude Code is signed in'), { action: 'done' });
+  await eventually(async () => (await client.model.list({ location: { directory } })).data.some((m) => m.providerID === 'claude-acp' && m.id === 'fixture-model'), 'model discovery after login');
   const logs = async () => (await readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
   const prompts = async () => (await logs()).filter((entry) => entry.method === 'session/prompt');
   const say = async (sessionID, text, files) => {

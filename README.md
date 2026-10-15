@@ -11,11 +11,12 @@ Use **Claude Code in OpenCode's terminal, desktop app, and web UI** with your Cl
 - **Native OpenCode UI:** built-in shell/file tool cards and standard permissions, including **Auto-accept permissions**.
 - **OpenCode tools and MCP:** reuses your connected tools, permissions, and plugin hooks through a local relay.
 - **Session continuity:** follow-ups, saved-session reloads, cancellation, and checkpoint recovery.
+- **Sign-in recovery:** clear authentication errors with an **Authenticate** action and a Claude sign-in URL to copy into your browser.
 - **Usage reports:** `/claude-usage` shows reported tokens, context, and cost without sending a Claude request.
 
 ## Install
 
-Requires **OpenCode V2**, **Node.js 22+**, npm, and Git. Tested with OpenCode **2.0.27** and Claude ACP adapter **0.89.1**. Install on the machine running the OpenCode server, as the same OS user. The plugin is built locally, not published to npm.
+Requires **OpenCode V2 2.0.27**, **Node.js 22+**, npm, and Git. Tested with the compiled OpenCode **2.0.27** host and Claude ACP adapter **0.89.1**. OpenCode **2.0.15 is incompatible** with this build: its plugin loader does not share the required Effect runtime and can fail with `fiber.cache.scheduler`. Check both `opencode --version` and `opencode api get /api/info`; after updating the CLI, restart the service to update the running host. Install on the machine running the OpenCode server, as the same OS user. The plugin is built locally, not published to npm.
 
 ### 1. Clone, build, and sign in
 
@@ -101,6 +102,7 @@ Restart after active work finishes, then refresh connected clients.
 - **Provider missing:** check the configured path, build, server, and **Manage models** visibility.
 - **Missing newer models:** update the plugin and Claude Code, then restart. Models come from your runtime and account; the plugin selects a newer installed CLI when available.
 - **Login or startup fails:** use the server's OS user and an absolute `nodeExecutable` path.
+- **Sign-in expired:** choose **Authenticate** in the session prompt, complete Claude's sign-in, then retry your message. Use `/claude-login` to open the prompt, including first-time setup before Claude models are available. The terminal login command above also works.
 - **Extra-usage error:** restore `integrationMode: "native"`; if it persists, check Anthropic's current guidance and contact support.
 
 ## Reference and development

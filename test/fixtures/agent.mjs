@@ -1,6 +1,6 @@
 // An actual stdio ACP peer: deterministic fixture only, never used by the plugin.
 import { createInterface } from 'node:readline';
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -15,6 +15,18 @@ let turns = 0;
 const pending = new Map();
 const prompts = new Map();
 const log = (entry) => process.env.ACP_TEST_LOG && appendFileSync(process.env.ACP_TEST_LOG, `${JSON.stringify({ pid: process.pid, ...entry })}\n`);
+if (process.argv.includes('--cli')) {
+  log({ method: 'auth/login', args: process.argv.slice(2), noBrowser: process.env.NO_BROWSER });
+  process.stdout.write('Open https://claude.ai/oauth/authorize?state=fixture&code_challenge=');
+  await delay(25);
+  process.stdout.write('fixture\nPaste code: ');
+  for await (const code of createInterface({ input: process.stdin })) {
+    if (code !== 'fixture-code') process.exit(1);
+    writeFileSync(process.env.ACP_TEST_AUTH_GATE, 'signed in');
+    process.exit(0);
+  }
+  process.exit(1);
+}
 const send = (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
 const result = (id, value) => send({ id, result: value });
 const update = (value) => send({ method: 'session/update', params: { sessionId, update: value } });
@@ -29,6 +41,10 @@ async function handle(message) {
   const { id, method, params = {} } = message;
   if (!method) { pending.get(id)?.(message.result); pending.delete(id); return; }
   log({ method, params });
+  if (process.env.ACP_TEST_AUTH_GATE && !existsSync(process.env.ACP_TEST_AUTH_GATE) &&
+      ['session/new', 'session/load', 'session/prompt'].includes(method)) {
+    return send({ id, error: { code: -32000, message: 'Authentication required' } });
+  }
   if (method === 'initialize') {
     log({ backgroundTasksDisabled: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS });
     return result(id, { protocolVersion: 1, agentCapabilities: { loadSession: process.env.ACP_TEST_NO_LOAD !== '1', promptCapabilities: { image: true }, mcpCapabilities: { http: true } } });

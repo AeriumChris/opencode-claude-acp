@@ -3,6 +3,7 @@ import { Readable, Writable } from 'node:stream';
 import { client, ndJsonStream, PROTOCOL_VERSION, type ClientConnection, type RequestPermissionRequest,
   type RequestPermissionResponse, type SessionConfigOption, type SessionUpdate, type McpServer } from '@agentclientprotocol/sdk';
 import { command, type Options } from './options.js';
+import { isAuthRequired } from './auth-error.js';
 
 export interface Choice { id: string; name: string }
 export interface ModelChoice extends Choice { efforts?: Choice[] }
@@ -108,7 +109,8 @@ export class AcpConnection {
       return false;
     } catch (error) {
       this.close();
-      throw new Error('Unable to start Claude ACP. Run the bundled Claude CLI login on the server, and check the configured executable.', { cause: error });
+      if (isAuthRequired(error)) throw error;
+      throw new Error('Unable to start Claude ACP. Check the configured executable and the adapter on the OpenCode server.', { cause: error });
     } finally { clearTimeout(timeout); }
   }
 

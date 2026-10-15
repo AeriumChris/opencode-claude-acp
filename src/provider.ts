@@ -1,4 +1,4 @@
-import { AIError, LLMEvent, UnknownProviderError } from '@opencode/ai';
+import { LLMEvent } from '@opencode/ai';
 import { Route, Protocol, type TransportDef } from '@opencode/ai/route';
 import { Context, Effect, Option, Schema, Stream } from 'effect';
 import type { Interface as PermissionService } from '@opencode/core/permission';
@@ -6,8 +6,8 @@ import { Agent } from '@opencode/schema/agent';
 import { Session } from '@opencode/schema/session';
 import { nativePermission } from './permissions.js';
 import { bridges } from './registry.js';
-
-const failure = (error: unknown) => new AIError({ reason: new UnknownProviderError({ message: error instanceof Error ? error.message : String(error) }) });
+import { providerFailure as failure } from './auth-error.js';
+import { captureForm } from './auth-form.js';
 
 // The pinned V2 plugin API exposes permission replies but not assertion. Resolve
 // the host's location service by its stable key, without loading a second Core
@@ -34,6 +34,7 @@ export function model(modelID: string, settings: Readonly<Record<string, unknown
       const controller = new AbortController();
       yield* Effect.addFinalizer(() => Effect.sync(() => controller.abort()));
       const services = yield* Effect.context<never>();
+      bridge.askForm = yield* captureForm;
       const permission = Context.getOption(services, HostPermission);
       const authorize = async (pending: Parameters<typeof nativePermission>[0]) => {
         if (Option.isNone(permission)) throw new Error('OpenCode permission service is unavailable. Update to the supported OpenCode version.');

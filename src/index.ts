@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { Plugin } from '@opencode/plugin';
+import { Plugin as EffectPlugin } from '@opencode/plugin/effect';
+import { fromPromise } from '@opencode/plugin/promise/adapter';
+import { Effect } from 'effect';
 import { Model } from '@opencode/schema/model';
 import { Provider } from '@opencode/schema/provider';
 import { Session } from '@opencode/schema/session';
@@ -8,9 +11,12 @@ import type { ModelChoice } from './acp.js';
 import { parseOptions, type Options } from './options.js';
 import { bridges } from './registry.js';
 import { Checkpoints } from './compaction.js';
+import { Authentication, type AskForm } from './auth.js';
+import { captureForm } from './auth-form.js';
+import { signInMessage } from './auth-error.js';
 
 export type { Options } from './options.js';
-export function createPlugin(options: Options = {}) {
+export function createPlugin(options: Options = {}, forms: { ask?: AskForm } = {}) {
   return Plugin.define({ id: 'opencode-claude-acp', async setup(ctx) {
     const instanceID = randomUUID();
     const providerID = Provider.ID.make('claude-acp');
@@ -34,6 +40,11 @@ export function createPlugin(options: Options = {}) {
       checkpoints.history(await ctx.session.context({ sessionID: Session.ID.make(sessionID) })),
       { providerID, id: Model.ID.make(modelID) }, 'provider'));
     bridges.set(instanceID, bridge);
+    const authentication = new Authentication(ctx, (form, signal) => {
+      const ask = forms.ask ?? bridge.askForm;
+      if (!ask) return Promise.reject(new Error(signInMessage));
+      return ask(form, signal);
+    }, configured, (directory) => bridge.discover(directory));
     const registrations: { dispose(): Promise<void> }[] = [];
     registrations.push(await ctx.provider.transform((editor) => {
       const models = choices.filter((item) => item.id !== 'default');
@@ -101,6 +112,13 @@ export function createPlugin(options: Options = {}) {
           description: 'Claude ACP usage report', metadata: { claudeAcpUsageReport: true }, delivery: 'queue', resume: true });
       },
     })));
+    registrations.push(await ctx.command.transform((editor) => editor.add({ name: 'claude-login',
+      description: 'Authenticate Claude Code on the OpenCode server.',
+      async execute({ sessionID }) {
+        if (!forms.ask && !bridge.askForm) throw new Error('Claude sign-in forms are unavailable in this host. Run the adapter with --cli auth login on the OpenCode server.');
+        authentication.offer(sessionID);
+      },
+    })));
     registrations.push(await ctx.session.hook('title', (event) => {
       event.result = event.messages.find((item) => item.role === 'user')?.content
         .filter((part) => part.type === 'text').map((part) => part.text).join(' ').replace(/\s+/g, ' ').slice(0, 80) || 'Claude Code (ACP)';
@@ -113,7 +131,10 @@ export function createPlugin(options: Options = {}) {
       if (event.model.providerID === providerID) event.result = await checkpoints.create(history);
       else event.messages = await checkpoints.restore(event.messages, history, event.model);
     }));
-    registrations.push(await ctx.session.hook('retry', (event) => { event.decision = { retry: false }; }, { providerID }));
+    registrations.push(await ctx.session.hook('retry', (event) => {
+      event.decision = { retry: false };
+      if (event.error.type === 'provider.auth') authentication.offer(event.sessionID);
+    }, { providerID }));
     registrations.push(await ctx.tool.hook('execute.before', (event) => {
       bridge.toolStarted(event.sessionID, event.id, event.tool);
     }));
@@ -126,7 +147,7 @@ export function createPlugin(options: Options = {}) {
       for await (const envelope of ctx.event.subscribe({ signal: events.signal })) {
         const event = envelope;
         if (event.type === 'session.status' && event.data.status.type === 'idle') bridge.onIdle(event.data.sessionID);
-        if (event.type === 'session.deleted') await bridge.reset(event.data.sessionID);
+        if (event.type === 'session.deleted') { authentication.cancel(event.data.sessionID); await bridge.reset(event.data.sessionID); }
       }
     })().catch(() => {});
     // A missing login never blocks loading all of the user's other providers.
@@ -135,6 +156,7 @@ export function createPlugin(options: Options = {}) {
       disposed = true;
       events.abort();
       bridge.close();
+      await authentication.close();
       bridges.delete(instanceID);
       await watching;
       await Promise.all(registrations.map((registration) => registration.dispose()));
@@ -142,4 +164,17 @@ export function createPlugin(options: Options = {}) {
   } });
 }
 
-export default createPlugin();
+// Command execution has the host runtime even when no model has been selected
+// or called. Keep that context across the Promise adapter for sign-in forms.
+export default EffectPlugin.define({ id: 'opencode-claude-acp', effect: (ctx) => Effect.suspend(() => {
+  const forms: { ask?: AskForm } = {};
+  return fromPromise(createPlugin({}, forms)).effect({ ...ctx, command: {
+    ...ctx.command,
+    transform: (callback) => ctx.command.transform((editor) => callback({
+      add: (definition) => editor.add({ ...definition, execute: (input) => Effect.gen(function* () {
+        if (definition.name === 'claude-login') forms.ask = yield* captureForm;
+        yield* definition.execute(input);
+      }) }),
+    })),
+  } });
+}) });

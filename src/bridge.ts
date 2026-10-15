@@ -11,6 +11,7 @@ import { ToolRelay, toolError, toolResult } from './tool-relay.js';
 import { UsageLedger, formatUsage, type UsageReport } from './usage.js';
 import { allowPermission, permissionChoices, permissionResponse, permissionSummary, type Approval } from './permissions.js';
 import { NativeTools } from './native-tools.js';
+import type { AskForm } from './auth.js';
 
 type Saved = { sessionID: string; directory: string; users: string[]; allowAll?: boolean };
 type Pending = { token: string; request: RequestPermissionRequest; answer?: Approval;
@@ -30,6 +31,7 @@ export interface Persistence {
 const hash = (message: Message) => createHash('sha256').update(JSON.stringify(message.content)).digest('hex');
 
 export class Bridge {
+  askForm?: AskForm;
   readonly usage: UsageLedger;
   private entries = new Map<string, Entry>();
   private closed = false;

@@ -61,7 +61,7 @@ Claude still manages its internal conversation and model requests. See [plugin c
 
 ## Requirements
 
-- **OpenCode V2**, with version 2.0.27 being the tested host version. V1 is not supported by this implementation. Keep the plugin's OpenCode and Effect dependencies aligned with the host; incompatible Effect exports can prevent the provider from loading.
+- **OpenCode V2 2.0.27**, verified with the compiled release executable. OpenCode 2.0.15 is incompatible with this build and can fail during plugin loading with `fiber.cache.scheduler`. Check the CLI with `opencode --version` and the running host with `opencode api get /api/info`; updating the CLI also requires a service restart. V1 is not supported by this implementation. Keep the plugin's OpenCode and Effect dependencies aligned with the host; incompatible Effect exports can prevent the provider from loading.
 - **Node.js 22 or newer**, npm, and Git on the machine running the OpenCode server.
 - A checkout of **[AeriumChris/opencode-claude-acp](https://github.com/AeriumChris/opencode-claude-acp)** on the server machine.
 - A working Claude Code sign-in for the **same OS user that runs the server**.
@@ -509,6 +509,10 @@ The shared catalog advertises `limit.context: 0` for ACP models. This is OpenCod
 ## Authentication and billing
 
 Claude authentication is handled by the **Claude CLI running as the server user**. Signing into an Anthropic API provider in OpenCode is not the same thing. An existing CLI can be selected with `CLAUDE_CODE_EXECUTABLE`; otherwise the plugin selects a newer installed copy or falls back to the bundled CLI. See [Newest models](#newest-models).
+
+When a Claude ACP request reports missing or expired authentication, the session shows a clear error and a native **Authenticate / Not now** question. Choose **Authenticate**, copy the displayed Claude sign-in URL into your browser, and paste the authorization code into the question's custom answer field if Claude provides one. Desktop currently displays this URL as text rather than a clickable button. If the browser completes the local callback, the prompt closes automatically. After success, retry your message.
+
+`/claude-login` opens the prompt even before the first Claude ACP request or when no Claude models are available. After sign-in, the plugin refreshes model discovery. The terminal login command in the installation steps also works. Sign-in runs with the same executable and environment as ACP; a custom adapter must support `--cli auth login`. Cancelling the prompt stops its login process; an unfinished login expires after five minutes. The Claude CLI owns credential storage and refresh.
 
 **This plugin does not select, measure, or guarantee a subscription-only billing pool.** Billing depends on Anthropic's current policy, the authenticated account, and Claude's configuration. Successful functional tests do not prove which allowance was charged. Review the current [Anthropic plan/SDK guidance](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) and your account's usage settings.
 
