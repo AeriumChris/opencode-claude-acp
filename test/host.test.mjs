@@ -53,6 +53,9 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
   assert.deepEqual(variants('fixture-model'), ['low', 'medium', 'high']);
   assert.deepEqual(variants('fixture-other'), ['low', 'max']);
   assert.deepEqual(variants('fixture-no-effort'), []);
+  assert.equal(acpModels.find((model) => model.id === 'fixture-model-fast').name, 'Fixture Claude Fast (credit)', 'Fast mode is selectable as its own model');
+  assert.deepEqual(variants('fixture-model-fast'), ['low', 'medium', 'high']);
+  assert(!acpModels.some((model) => model.id === 'fixture-other-fast'), 'Fast entries exist only for models that support Fast mode');
   const recentFamilies = new Map();
   for (const model of acpModels) {
     const released = new Date(model.time.released).toISOString().slice(0, 10);
@@ -89,11 +92,17 @@ test('real OpenCode host: model catalog, streams, continuity, approvals, and can
   await host.sessions.prompt({ sessionID, text: 'model switched' });
   await host.sessions.wait({ sessionID });
   assert((await logs()).some((entry) => entry.method === 'session/set_config_option' && entry.params.value === 'fixture-other'));
-  assert.deepEqual((await logs()).filter((entry) => entry.effective).at(-1).effective, { sessionId: prompts[0].params.sessionId, model: 'fixture-other', effort: 'max' });
+  assert.deepEqual((await logs()).filter((entry) => entry.effective).at(-1).effective, { sessionId: prompts[0].params.sessionId, model: 'fixture-other', effort: 'max', fast: 'off' });
+  await host.sessions.switchModel({ sessionID, model: { providerID: 'claude-acp', id: 'fixture-model-fast', variant: 'high' } });
+  await host.sessions.prompt({ sessionID, text: 'fast model' });
+  await host.sessions.wait({ sessionID });
+  assert.deepEqual((await logs()).filter((entry) => entry.effective).at(-1).effective, { sessionId: prompts[0].params.sessionId, model: 'fixture-model', effort: 'high', fast: 'on' }, 'the Fast entry selects the base model with Fast mode on');
   await host.sessions.switchModel({ sessionID, model: { providerID: 'claude-acp', id: 'fixture-model' } });
   await host.sessions.prompt({ sessionID, text: 'named model restored' });
   await host.sessions.wait({ sessionID });
-  assert.equal((await logs()).filter((entry) => entry.effective).at(-1).effective.model, 'fixture-model', 'named model is restored even when changed host instructions reload the connection');
+  const restored = (await logs()).filter((entry) => entry.effective).at(-1).effective;
+  assert.equal(restored.model, 'fixture-model', 'named model is restored even when changed host instructions reload the connection');
+  assert.equal(restored.fast, 'off', 'leaving the Fast entry turns Fast mode off');
   await host.sessions.switchModel({ sessionID, model: { providerID: 'claude-acp', id: 'fixture-model', variant: 'high' } });
   await host.sessions.prompt({ sessionID, text: 'high again' });
   await host.sessions.wait({ sessionID });

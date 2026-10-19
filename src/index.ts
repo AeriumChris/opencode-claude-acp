@@ -7,7 +7,7 @@ import { Model } from '@opencode/schema/model';
 import { Provider } from '@opencode/schema/provider';
 import { Session } from '@opencode/schema/session';
 import { Bridge } from './bridge.js';
-import type { ModelChoice } from './acp.js';
+import { FAST_SUFFIX, type ModelChoice } from './acp.js';
 import { parseOptions, type Options } from './options.js';
 import { bridges } from './registry.js';
 import { Checkpoints } from './compaction.js';
@@ -47,7 +47,12 @@ export function createPlugin(options: Options = {}, forms: { ask?: AskForm } = {
     }, configured, (directory) => bridge.discover(directory));
     const registrations: { dispose(): Promise<void> }[] = [];
     registrations.push(await ctx.provider.transform((editor) => {
-      const models = choices.filter((item) => item.id !== 'default');
+      const advertised = choices.filter((item) => item.id !== 'default');
+      const ids = new Set(advertised.map((item) => item.id));
+      // Fast mode is a native toggle, but the selector has no per-model switch.
+      // Offer it as a sibling model so it can be chosen like any other.
+      const models = advertised.flatMap((item) => item.fast && !ids.has(`${item.id}${FAST_SUFFIX}`)
+        ? [item, { ...item, id: `${item.id}${FAST_SUFFIX}`, name: `${item.name} Fast (credit)` }] : [item]);
       editor.add({ info: { ...Provider.Info.empty(providerID), canonical: Provider.ID.anthropic, name: 'Claude Code (ACP)', activation: 'enabled',
         package: new URL('./provider.js', import.meta.url).href, settings: { instanceID } },
         models: models.map((item) => ({ ...Model.Info.default(providerID, Model.ID.make(item.id)), name: item.name,

@@ -305,6 +305,12 @@ To activate this behavior after updating, rebuild the **configured plugin checko
 - Clearing the variant to **Default** clears the explicit override and returns control to Claude's defaults/settings.
 - An in-progress prompt, including one waiting for approval, retains the effort it started with.
 
+### Fast mode
+
+- Claude Code exposes Fast mode as a per-model setting, not as a separate model. For each model that advertises it, the picker adds a **`<model> Fast (credit)`** entry (ID `<model>-fast`, for example `opus-fast`) with the same effort variants. "(credit)" is a reminder that Fast mode is billed to Claude extra usage, not your subscription's included usage.
+- Choosing the Fast entry selects the base model with Fast mode on; choosing the regular entry turns it off. Like effort, the change applies to the next new prompt.
+- If extra usage is not enabled for your Claude account, Claude Code turns Fast mode off with "Fast mode turned off: requires extra usage to be enabled for this account." and the prompt continues at normal speed. Enable extra usage under claude.ai **Settings → Usage** (or `/extra-usage` in the Claude Code CLI), then restart OpenCode.
+
 ### Optional default model
 
 To use Opus by default for new work, confirm `opus` appears in the catalog and merge this field into the appropriate OpenCode config:

@@ -6,7 +6,11 @@ import { command, type Options } from './options.js';
 import { isAuthRequired } from './auth-error.js';
 
 export interface Choice { id: string; name: string }
-export interface ModelChoice extends Choice { efforts?: Choice[] }
+export interface ModelChoice extends Choice { efforts?: Choice[]; fast?: boolean }
+/** Claude ACP exposes Fast mode as a per-session toggle on supporting models. */
+export const FAST_SUFFIX = '-fast';
+const fastOption = (config: SessionConfigOption[]) => config.find((item) => item.id === 'fast');
+export function supportsFast(config: SessionConfigOption[]) { return fastOption(config) !== undefined; }
 export function effortChoices(config: SessionConfigOption[]): Choice[] {
   const option = config.find((item) => item.category === 'thought_level' && item.type === 'select');
   if (!option || option.type !== 'select') return [];
@@ -18,7 +22,7 @@ export function modelChoices(config: SessionConfigOption[]): ModelChoice[] {
   if (!option || option.type !== 'select') return [];
   return option.options.flatMap((item) => 'options' in item ? item.options : [item])
     .map((item) => ({ id: item.value, name: item.name,
-      ...(item.value === option.currentValue ? { efforts: effortChoices(config) } : {}) }));
+      ...(item.value === option.currentValue ? { efforts: effortChoices(config), fast: supportsFast(config) } : {}) }));
 }
 
 export class AcpConnection {
@@ -120,17 +124,47 @@ export class AcpConnection {
   }
 
   async selectModel(id: string) {
-    if (id === 'default' && !modelChoices(this.config).some((item) => item.id === 'default')) {
+    const advertised = (value: string) => modelChoices(this.config).some((item) => item.id === value);
+    // `<model>-fast` is the plugin's catalog entry for a model with Fast mode on.
+    const fast = id.endsWith(FAST_SUFFIX) && !advertised(id) && advertised(id.slice(0, -FAST_SUFFIX.length));
+    if (fast) id = id.slice(0, -FAST_SUFFIX.length);
+    if (id === 'default' && !advertised('default')) {
       if (!this.initialModel) return;
       id = this.initialModel;
     }
     const option = this.config.find((item) => item.category === 'model' && item.type === 'select');
-    if (!option || option.type !== 'select' || !modelChoices(this.config).some((item) => item.id === id)) {
+    if (!option || option.type !== 'select' || !advertised(id)) {
       throw new Error(`Claude ACP does not advertise model ${id} for this session.`);
     }
-    if (option.currentValue === id) return;
+    if (option.currentValue !== id) {
+      const result = await this.connection.agent.request('session/set_config_option', {
+        sessionId: this.sessionID, configId: option.id, value: id,
+      });
+      this.config = result.configOptions;
+    }
+    await this.selectFast(fast);
+  }
+
+  /** Fast mode persists across native model switches, so always pin it explicitly. */
+  private async selectFast(enabled: boolean) {
+    const option = fastOption(this.config);
+    if (!option) {
+      if (enabled) throw new Error('Claude ACP does not advertise Fast mode for this model.');
+      return;
+    }
+    if (option.type === 'boolean') {
+      if (option.currentValue === enabled) return;
+      const result = await this.connection.agent.request('session/set_config_option', {
+        sessionId: this.sessionID, configId: option.id, type: 'boolean', value: enabled,
+      });
+      this.config = result.configOptions;
+      return;
+    }
+    if (option.type !== 'select') return;
+    const value = enabled ? 'on' : 'off';
+    if (option.currentValue === value) return;
     const result = await this.connection.agent.request('session/set_config_option', {
-      sessionId: this.sessionID, configId: option.id, value: id,
+      sessionId: this.sessionID, configId: option.id, value,
     });
     this.config = result.configOptions;
   }

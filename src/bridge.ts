@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { ContentBlock, RequestPermissionRequest, RequestPermissionResponse, SessionUpdate } from '@agentclientprotocol/sdk';
 import { LLMEvent, type LLMRequest, type Message, type ToolEntry } from '@opencode/ai';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { AcpConnection, effortChoices, modelChoices, type ModelChoice } from './acp.js';
+import { AcpConnection, effortChoices, modelChoices, supportsFast, type ModelChoice } from './acp.js';
 import type { Options } from './options.js';
 import { Queue } from './queue.js';
 import { cleanMessages } from './prompt.js';
@@ -62,7 +62,7 @@ export class Bridge {
         if (this.closed) break;
         try {
           await acp.selectModel(model.id);
-          if (!this.closed) this.inventory([{ ...model, efforts: effortChoices(acp.config) }]);
+          if (!this.closed) this.inventory([{ ...model, efforts: effortChoices(acp.config), fast: supportsFast(acp.config) }]);
         } catch { /* A temporarily unavailable model must not hide other choices. */ }
       }
     }

@@ -6,7 +6,7 @@ Use **Claude Code in OpenCode's terminal, desktop app, and web UI** with your Cl
 
 ## Features
 
-- **Claude model picker:** discovers available Opus, Sonnet, Haiku, Fable, and older models, with per-model effort levels.
+- **Claude model picker:** discovers available Opus, Sonnet, Haiku, Fable, and older models, with per-model effort levels and **Fast** entries for models that support Fast mode.
 - **Streaming and attachments:** text, available thought output, tool activity, screenshots, and source files.
 - **Native OpenCode UI:** built-in shell/file tool cards and standard permissions, including **Auto-accept permissions**.
 - **OpenCode tools and MCP:** reuses your connected tools, permissions, and plugin hooks through a local relay.

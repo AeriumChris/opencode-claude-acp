@@ -10,6 +10,7 @@ let sessionId;
 let servers = [];
 let model = 'fixture-model';
 let effort = 'default';
+let fast = 'off'; // Like Claude Code, Fast intent survives switches to models that hide the option.
 let nextID = 1000;
 let turns = 0;
 const pending = new Map();
@@ -36,7 +37,9 @@ const config = () => [{ id: 'model', name: 'Model', type: 'select', category: 'm
     { value: 'fixture-model', name: 'Fixture Claude' }, { value: 'fixture-other', name: 'Other fixture model' },
     { value: 'fixture-no-effort', name: 'No effort fixture' }] },
   ...(levels().length ? [{ id: 'thinking-budget', name: 'Effort', type: 'select', category: 'thought_level', currentValue: effort,
-    options: [{ group: 'supported', name: 'Supported', options: levels().map((value) => ({ value, name: value })) }] }] : [])];
+    options: [{ group: 'supported', name: 'Supported', options: levels().map((value) => ({ value, name: value })) }] }] : []),
+  ...(model === 'fixture-model' ? [{ id: 'fast', name: 'Fast mode', type: 'select', category: 'model_config', currentValue: fast,
+    options: [{ value: 'off', name: 'Off' }, { value: 'on', name: 'On' }] }] : [])];
 async function handle(message) {
   const { id, method, params = {} } = message;
   if (!method) { pending.get(id)?.(message.result); pending.delete(id); return; }
@@ -54,7 +57,8 @@ async function handle(message) {
   if (method === 'session/set_config_option') {
     if (params.configId === 'model') { model = params.value; if (!levels().includes(effort)) effort = 'default'; }
     else if (params.configId === 'thinking-budget' && levels().includes(params.value)) effort = params.value;
-    else return send({ id, error: { code: -32602, message: 'Unsupported effort' } });
+    else if (params.configId === 'fast' && model === 'fixture-model' && ['on', 'off'].includes(params.value)) fast = params.value;
+    else return send({ id, error: { code: -32602, message: 'Unsupported config option' } });
     return result(id, { configOptions: config() });
   }
   if (method === 'session/cancel') {
@@ -67,7 +71,7 @@ async function handle(message) {
     const usageUpdate = () => (process.env.ACP_TEST_USAGE || process.env.ACP_TEST_CONTEXT) && update({ sessionUpdate: 'usage_update', used: 1000,
       size: Number(process.env.ACP_TEST_CONTEXT) || (model === 'fixture-other' ? 500000 : 1000000), cost: { amount: turns * 0.25, currency: 'USD' } });
     usageUpdate();
-    log({ effective: { sessionId, model, effort } });
+    log({ effective: { sessionId, model, effort, fast } });
     prompts.set(id, true);
     const text = params.prompt.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
     if (text === 'hang') return;
