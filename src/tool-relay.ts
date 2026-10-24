@@ -2,9 +2,14 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { McpServer as AcpMcpServer } from '@agentclientprotocol/sdk';
 import type { ToolEntry, ToolResultValue } from '@opencode/ai';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
+
+// The MCP SDK is large. Load it with the first relayed request, not the plugin.
+let mcp: Promise<[typeof import('@modelcontextprotocol/sdk/server/index.js'),
+  typeof import('@modelcontextprotocol/sdk/server/streamableHttp.js'), typeof import('@modelcontextprotocol/sdk/types.js')]> | undefined;
+const loadMcp = () => mcp ??= Promise.all([import('@modelcontextprotocol/sdk/server/index.js'),
+  import('@modelcontextprotocol/sdk/server/streamableHttp.js'), import('@modelcontextprotocol/sdk/types.js')]);
 
 export const toolError = (text: string): CallToolResult => ({ isError: true, content: [{ type: 'text', text }] });
 
@@ -30,6 +35,7 @@ export class ToolRelay {
         res.writeHead(403).end(); return;
       }
       if (req.method !== 'POST') { res.writeHead(405).end(); return; }
+      const [{ Server }, { StreamableHTTPServerTransport }, { CallToolRequestSchema, ListToolsRequestSchema }] = await loadMcp();
       const server = new Server({ name: 'opencode', version: '0.1.0' }, { capabilities: { tools: {} } });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       this.requests.add(server);
@@ -54,6 +60,7 @@ export class ToolRelay {
   }
 
   async start(): Promise<AcpMcpServer> {
+    void loadMcp().catch(() => {});
     await new Promise<void>((resolve, reject) => {
       this.http.once('error', reject);
       this.http.listen(0, '127.0.0.1', () => { this.http.off('error', reject); resolve(); });

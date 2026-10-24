@@ -1,8 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Plugin } from '@opencode/plugin';
 import { Plugin as EffectPlugin } from '@opencode/plugin/effect';
 import { fromPromise } from '@opencode/plugin/promise/adapter';
-import { Effect } from 'effect';
+import { Effect, type Schema } from 'effect';
 import { Model } from '@opencode/schema/model';
 import { Provider } from '@opencode/schema/provider';
 import { Session } from '@opencode/schema/session';
@@ -13,9 +13,24 @@ import { bridges } from './registry.js';
 import { Checkpoints } from './compaction.js';
 import { Authentication, type AskForm } from './auth.js';
 import { captureForm } from './auth-form.js';
-import { signInMessage } from './auth-error.js';
+import { isAuthRequired, signInMessage } from './auth-error.js';
 
 export type { Options } from './options.js';
+
+/** A different adapter or Claude runtime can advertise different models. */
+function catalogStorageKey(options: Options) {
+  const runtime = [options.command, options.args, options.nodeExecutable, options.env];
+  return `catalog:${createHash('sha256').update(JSON.stringify(runtime)).digest('hex').slice(0, 16)}`;
+}
+
+function cachedChoices(value: unknown): ModelChoice[] {
+  const choice = (item: unknown): item is { id: string; name: string } => typeof item === 'object' && item !== null &&
+    typeof (item as { id?: unknown }).id === 'string' && typeof (item as { name?: unknown }).name === 'string';
+  if (!Array.isArray(value) || !value.every(choice)) return [];
+  return value.map((item: ModelChoice) => ({ id: item.id, name: item.name,
+    ...(Array.isArray(item.efforts) && item.efforts.every(choice) ? { efforts: item.efforts } : {}),
+    ...(typeof item.fast === 'boolean' ? { fast: item.fast } : {}) }));
+}
 export function createPlugin(options: Options = {}, forms: { ask?: AskForm } = {}) {
   return Plugin.define({ id: 'opencode-claude-acp', async setup(ctx) {
     const instanceID = randomUUID();
@@ -24,18 +39,26 @@ export function createPlugin(options: Options = {}, forms: { ask?: AskForm } = {
     // selector hides epoch-dated entries and keeps only one model per family.
     // Date these catalog entries when registered, with one family per choice.
     const catalogRegisteredAt = Date.now();
-    let choices: ModelChoice[] = [];
     let disposed = false;
     const checkpoints = new Checkpoints(ctx.storage);
     const configured = parseOptions({ ...ctx.options, ...options });
-    const bridge = new Bridge(configured, ctx.storage, (models) => {
-      if (!models.length || disposed) return;
-      const merged = new Map(choices.map((model) => [model.id, model]));
-      for (const model of models) merged.set(model.id, { ...merged.get(model.id), ...model });
-      const next = [...merged.values()];
+    // Discovery starts Claude Code and probes every model, which takes many
+    // seconds. Show the last discovered catalog at once, then refresh it.
+    const catalogKey = catalogStorageKey(configured);
+    let choices = await ctx.storage.get(catalogKey).then(cachedChoices, () => []);
+    const publish = (next: ModelChoice[], persist: boolean) => {
+      if (persist) void (next.length ? ctx.storage.set(catalogKey, next as unknown as Schema.Json)
+        : ctx.storage.remove(catalogKey)).catch(() => {});
       if (JSON.stringify(next) === JSON.stringify(choices)) return;
       choices = next;
       void ctx.provider.reload().catch(() => {});
+    };
+    const bridge = new Bridge(configured, ctx.storage, (models, complete) => {
+      if (!models.length || disposed) return;
+      if (complete) return publish(models, true);
+      const merged = new Map(choices.map((model) => [model.id, model]));
+      for (const model of models) merged.set(model.id, { ...merged.get(model.id), ...model });
+      publish([...merged.values()], false);
     }, async (sessionID, messages, modelID) => checkpoints.restore(messages,
       checkpoints.history(await ctx.session.context({ sessionID: Session.ID.make(sessionID) })),
       { providerID, id: Model.ID.make(modelID) }, 'provider'));
@@ -156,7 +179,10 @@ export function createPlugin(options: Options = {}, forms: { ask?: AskForm } = {
       }
     })().catch(() => {});
     // A missing login never blocks loading all of the user's other providers.
-    void bridge.discover(ctx.location.directory).catch(() => {});
+    // Signed out, the cached catalog would only offer models that cannot run.
+    void bridge.discover(ctx.location.directory).catch((error) => {
+      if (!disposed && isAuthRequired(error)) publish([], true);
+    });
     return async () => {
       disposed = true;
       events.abort();

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { ContentBlock, RequestPermissionRequest, RequestPermissionResponse, SessionUpdate } from '@agentclientprotocol/sdk';
 import { LLMEvent, type LLMRequest, type Message, type ToolEntry } from '@opencode/ai';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { AcpConnection, effortChoices, modelChoices, supportsFast, type ModelChoice } from './acp.js';
+import { AcpConnection, loadAcp, effortChoices, modelChoices, supportsFast, type ModelChoice } from './acp.js';
 import type { Options } from './options.js';
 import { Queue } from './queue.js';
 import { cleanMessages } from './prompt.js';
@@ -38,7 +38,8 @@ export class Bridge {
   private discoveries = new Set<AcpConnection>();
   private originalTexts = new Map<string, ReadonlyMap<string, readonly string[]>>();
   constructor(readonly options: Options, readonly storage: Persistence,
-    readonly inventory: (models: ModelChoice[]) => void = () => {},
+    /** `complete` marks a finished discovery: the list replaces the catalog. */
+    readonly inventory: (models: ModelChoice[], complete?: boolean) => void = () => {},
     readonly restoreMessages: (sessionID: string, messages: readonly Message[], modelID: string) => Promise<readonly Message[]> = async (_id, messages) => messages,
   ) { this.usage = new UsageLedger(storage); }
 
@@ -47,6 +48,7 @@ export class Bridge {
   }
 
   async discover(directory: string) {
+    await loadAcp();
     if (this.closed) return;
     const acp = new AcpConnection(directory, this.options, {
       update() {}, permission: async () => ({ outcome: { outcome: 'cancelled' } }), close() {},
@@ -57,19 +59,24 @@ export class Bridge {
       const models = modelChoices(acp.config).filter((model) => model.id !== 'default');
       // The thought_level option belongs to the currently selected model. Probe
       // choices in this disposable session, never in a user's active turn.
+      // Publish the names first, then the probed details once: every update
+      // reloads the host's provider catalog.
       if (!this.closed) this.inventory(models);
+      const probed: ModelChoice[] = [];
       for (const model of models) {
-        if (this.closed) break;
+        if (this.closed) return;
         try {
           await acp.selectModel(model.id);
-          if (!this.closed) this.inventory([{ ...model, efforts: effortChoices(acp.config), fast: supportsFast(acp.config) }]);
-        } catch { /* A temporarily unavailable model must not hide other choices. */ }
+          probed.push({ ...model, efforts: effortChoices(acp.config), fast: supportsFast(acp.config) });
+        } catch { probed.push(model); /* A temporarily unavailable model must not hide other choices. */ }
       }
+      if (!this.closed) this.inventory(probed, true);
     }
     finally { acp.close(); this.discoveries.delete(acp); }
   }
 
   private async entry(id: string, directory: string, tools: readonly ToolEntry[], system?: string) {
+    await loadAcp();
     if (this.closed) throw new Error('Claude ACP plugin has closed.');
     let entry = this.entries.get(id);
     const catalog = createHash('sha256').update(JSON.stringify(tools)).digest('hex');

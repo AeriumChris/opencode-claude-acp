@@ -1,9 +1,17 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { client, ndJsonStream, PROTOCOL_VERSION, type ClientConnection, type RequestPermissionRequest,
-  type RequestPermissionResponse, type SessionConfigOption, type SessionUpdate, type McpServer } from '@agentclientprotocol/sdk';
+import type { ClientConnection, RequestPermissionRequest, RequestPermissionResponse, SessionConfigOption,
+  SessionUpdate, McpServer } from '@agentclientprotocol/sdk';
 import { command, type Options } from './options.js';
 import { isAuthRequired } from './auth-error.js';
+
+// The SDK is loaded on first connection so it does not delay plugin activation.
+type Sdk = typeof import('@agentclientprotocol/sdk');
+let sdk: Sdk | undefined;
+let loading: Promise<Sdk> | undefined;
+export function loadAcp() {
+  return loading ??= import('@agentclientprotocol/sdk').then((module) => sdk = module, (error) => { loading = undefined; throw error; });
+}
 
 export interface Choice { id: string; name: string }
 export interface ModelChoice extends Choice { efforts?: Choice[]; fast?: boolean }
@@ -40,6 +48,8 @@ export class AcpConnection {
     permission(request: RequestPermissionRequest): Promise<RequestPermissionResponse>;
     close(error: Error): void;
   }) {
+    if (!sdk) throw new Error('Call loadAcp() before creating an ACP connection.');
+    const { client, ndJsonStream } = sdk;
     const [exe, args, extraEnv] = command(options);
     // Native background completions can arrive after session/prompt returns,
     // outside OpenCode's tool loop. Keep Claude's tasks in the live ACP turn.
@@ -88,7 +98,7 @@ export class AcpConnection {
     timeout.unref();
     try {
       const initialized = await this.connection.agent.request('initialize', {
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: sdk!.PROTOCOL_VERSION,
         clientInfo: { name: 'opencode-claude-acp', version: '0.1.0' },
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
       });
