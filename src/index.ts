@@ -23,6 +23,12 @@ function catalogStorageKey(options: Options) {
   return `catalog:${createHash('sha256').update(JSON.stringify(runtime)).digest('hex').slice(0, 16)}`;
 }
 
+/** Unwraps title-prompt framing if only the request text is available. */
+function titleText(text: string) {
+  const wrapped = /<message>([\s\S]*?)(?:<\/message>|$)/i.exec(text)?.[1] ?? text;
+  return wrapped.replace(/^\s*Original request:\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+}
+
 function cachedChoices(value: unknown): ModelChoice[] {
   const choice = (item: unknown): item is { id: string; name: string } => typeof item === 'object' && item !== null &&
     typeof (item as { id?: unknown }).id === 'string' && typeof (item as { name?: unknown }).name === 'string';
@@ -147,9 +153,14 @@ export function createPlugin(options: Options = {}, forms: { ask?: AskForm } = {
         authentication.offer(sessionID);
       },
     })));
-    registrations.push(await ctx.session.hook('title', (event) => {
-      event.result = event.messages.find((item) => item.role === 'user')?.content
-        .filter((part) => part.type === 'text').map((part) => part.text).join(' ').replace(/\s+/g, ' ').slice(0, 80) || 'Claude Code (ACP)';
+    registrations.push(await ctx.session.hook('title', async (event) => {
+      // Title requests carry a host- or plugin-built prompt (for example a
+      // "Here is the first message..." wrapper), so title from the session itself.
+      const history = await ctx.session.context({ sessionID: event.sessionID }).then((messages) => checkpoints.history(messages), () => []);
+      const first = history.flatMap((message) => message.type === 'user' ? [message.text] : [])[0];
+      const text = first ?? event.messages.find((item) => item.role === 'user')?.content
+        .filter((part) => part.type === 'text').map((part) => part.text).join(' ');
+      event.result = titleText(text ?? '') || 'Claude Code (ACP)';
     }, { providerID }));
     registrations.push(await ctx.session.hook('generate', () => {
       throw new Error('Claude ACP supports interactive sessions; auxiliary generation is not supported.');
